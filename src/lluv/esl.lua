@@ -337,6 +337,7 @@ function ESLConnection:__init()
   self._bgjobs   = nil
   self._authed   = false
   self._cli      = nil
+  self._events   = {'BACKGROUND_JOB', 'CHANNEL_EXECUTE_COMPLETE'}
 
   return self
 end
@@ -440,6 +441,10 @@ function ESLConnection:open(cb)
       if err then self:_close(err)
       elseif reply:getReplyOk('accepted') then
         self._authed = true
+        return self:subscribe(self._events, function(self, err, reply)
+          if err then self:_close(err) end
+          cb(self, err)
+        end)
       end
       cb(self, err, reply, headers)
     end)
