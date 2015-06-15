@@ -3,14 +3,11 @@ local ut     = require "lluv.utils"
 
 local utils = {}
 
-function utils.bgjob_result(ev)
-  local call_result = ev:getBody()
-  if not call_result then return nil, 'no event body' end
-  local status, code = call_result:match("^%s*([+-][^%s]+)%s+(.*)$")
-  if code then code = code:match("^%s*(.-)%s*$") end
-  if status == '+OK' then return true, code end
-  if status == '-ERR' then return false, code end
-  return nil, call_result
+-- [+-][OK|ERR|USAGE|...][Message]
+function utils.split_status(str)
+  local ok, status, msg = string.match(str, "^%s*([-+])([^%s]+)%s*(.-)%s*$")
+  if not ok then return nil, str end
+  return ok == '+', status, msg
 end
 
 -------------------------------------------------------------------------------
@@ -255,5 +252,21 @@ utils.dial_string.new        = function(...) return DialString.new(...) end
 
 end
 -------------------------------------------------------------------------------
+
+local function hex_to_char(h)
+  return string.char(tonumber(h, 16))
+end
+
+local function char_to_hex(ch)
+  return string.format("%%%.2X", string.byte(ch))
+end
+
+function utils.decodeURI(str)
+  return (string.gsub(str, '%%(%x%x)', hex_to_char))
+end
+
+function utils.encodeURI(str)
+  return (string.gsub(str, '[^A-Za-z0-9.%-\\/_: ]', char_to_hex))
+end
 
 return utils

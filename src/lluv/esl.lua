@@ -1,26 +1,15 @@
 local uv           = require "lluv"
 local ut           = require "lluv.utils"
 local EventEmitter = require "lluv.esl.EventEmitter"
+local ESLUtils     = require "lluv.esl.utils"
 local cjson        = require "cjson.safe"
 local lom          = require "lxp.lom"
+local uuid         = require "uuid"
 
 local EOL = '\n'
 
-local function hex_to_char(h)
-  return string.char(tonumber(h, 16))
-end
-
-local function char_to_hex(ch)
-  return string.format("%%%.2X", string.byte(ch))
-end
-
-local function decodeURI(str)
-  return (string.gsub(str, '%%(%x%x)', hex_to_char))
-end
-
-local function encodeURI(str)
-  return (string.gsub(str, '[^A-Za-z0-9.%-\\/_: ]', char_to_hex))
-end
+local encodeURI, decodeURI = ESLUtils.encodeURI, ESLUtils.decodeURI
+local split_status = ESLUtils.split_status
 
 local ESLEvent = ut.class() do
 
@@ -137,22 +126,25 @@ end
 function ESLEvent:getReply()
   local reply = self._headers['Reply-Text']
   if reply then
-    local ok, msg = reply:match("^[-+](%S+)%s+(.+)$")
-    return ok, msg
+    local ok, status, msg = split_status(reply)
+    if ok == nil then
+      --! @todo invalid reply (raise protocol error)
+    end
+    return ok, status, msg
   end
 end
 
 function ESLEvent:getReplyOk(txt)
-  local ok, msg = self:getReply()
-  if ok == 'OK' then
+  local ok, status, msg = self:getReply()
+  if ok then
     if txt then return txt == msg end
     return msg
   end
 end
 
 function ESLEvent:getReplyErr(txt)
-  local ok, msg = self:getReply()
-  if ok == 'ERR' then
+  local ok, status, msg = self:getReply()
+  if not ok then
     if txt then return txt == msg end
     return msg
   end
@@ -315,9 +307,11 @@ local ESLConnection = ut.class(EventEmitter) do
 
 local function encode_cmd(cmd, args)
   cmd = cmd .. EOL
-  if args then 
+  if args then
     if type(args) == "table" then
-      cmd = cmd .. table.concat(args, EOL) .. EOL
+      for k, v in pairs(args) do
+        cmd = cmd .. k .. ": " .. encodeURI(v) .. EOL
+      end
     else
       cmd = cmd .. args .. EOL
     end
@@ -464,7 +458,8 @@ function ESLConnection:sendRecv(cmd, args, cb)
   if type(args) == 'function' then
     cb, args = args
   end
-  self._cli:write(encode_cmd(cmd, args), on_write_done, self)
+  local ev = encode_cmd(cmd, args)
+  self._cli:write(ev, on_write_done, self)
   self._queue:push(cb or dummy)
   return self
 end
@@ -478,17 +473,52 @@ function ESLConnection:bgapi(cmd, args, cb)
     cb, args = args
   end
 
-  return self:sendRecv('bgapi ' .. cmd, args, function(self, err, reply)
+  if args and type(args) == 'table' then
+    args = table.concat(args, ' ')
+  end
+
+  local bgcmd = string.format("bgapi %s %s", cmd, args or '')
+  local job_id
+
+  local function on_command(self, err, reply)
     if err or not reply:getReplyOk() then
       return cb(self, err, reply)
     end
 
     local jid = reply:getHeader('Job-UUID')
-    self._bgjobs[jid] = cb
-  end)
+    self._bgjobs[jid] = job_id and function(...)
+      self:filterDelete('Job-UUID', job_id)
+      cb(...)
+    end or cb
+  end
+
+  if self._filtered then
+    job_id = uuid.new()
+    return self:filter('Job-UUID', job_id, function(self, err, reply)
+      if err then return cb(self, err, reply) end
+      self:sendRecv(bgcmd, {['Job-UUID'] = job_id}, on_command)
+    end)
+  end
+
+  return self:sendRecv(bgcmd, on_command)
 end
 
-function ESLConnection:filter(header, value, cb)
+local function filter(self, header, value, cb)
+  self._filtered = true
+  return self:sendRecv('filter ' .. header .. ' ' .. value, cb)
+end
+
+local function filterExclude(self, header, value, cb)
+  self._filtered = true
+  return self:sendRecv('nixevents ' .. header .. ' ' .. value, cb)
+end
+
+local function filterDelete(self, header, value, cb)
+  self._filtered = true
+  return self:sendRecv('filter delete ' .. header .. ' ' .. value, cb)
+end
+
+local function filter_impl(self, fn, header, value, cb)
   if type(header) == 'table' then
     cb = value or dummy
 
@@ -510,17 +540,21 @@ function ESLConnection:filter(header, value, cb)
       if not r then return cb(self, nil, reply) end
       t[#t] = nil
 
-      return self:sendRecv('filter ' .. r[1] .. ' ' .. r[2], next_filter)
+      return fn(self, r[1], r[2], next_filter)
     end
 
     return next_filter(self)
   end
 
-  return self:sendRecv('filter ' .. header .. ' ' .. value, cb)
+  return fn(self, header, value, cb)
+end
+
+function ESLConnection:filter(header, value, cb)
+  return filter_impl(self, filter, header, value, cb)
 end
 
 function ESLConnection:filterExclude(header, value, cb)
-  return self:sendRecv('nixevents ' .. header .. ' ' .. value, cb)
+  return filter_impl(self, filterExclude, header, value, cb)
 end
 
 function ESLConnection:filterDelete(header, value, cb)
@@ -528,7 +562,7 @@ function ESLConnection:filterDelete(header, value, cb)
     cb, value = value
   end
 
-  return self._sendRecv('filter delete ' .. header .. (value and ' ' .. value or ''), cb)
+  return filter_impl(self, filterDelete, header, value or '', cb)
 end
 
 function ESLConnection:events(etype, events, cb)
@@ -536,10 +570,14 @@ function ESLConnection:events(etype, events, cb)
     cb, events = events
   end
 
-  events = events or 'all'
+  events = events or 'ALL'
 
   if type(events) == 'table' then
     events = table.concat(events, ' ')
+  end
+
+  if events ~= 'ALL' then
+    events = events .. ' ' .. table.concat(self._events, ' ')
   end
 
   return self:sendRecv('event ' .. etype .. ' ' .. events, cb)
