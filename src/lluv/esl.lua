@@ -1,7 +1,10 @@
+if not ... then package.path = '..\\?.lua;' .. package.path end
+
 local uv           = require "lluv"
 local ut           = require "lluv.utils"
-local EventEmitter = require "lluv.esl.EventEmitter"
+local EventEmitter = require "lluv.esl.EventEmitter".TreeEventEmitter
 local ESLUtils     = require "lluv.esl.utils"
+local ESLError     = require "lluv.esl.error"
 local cjson        = require "cjson.safe"
 local lom          = require "lxp.lom"
 local uuid         = require "uuid"
@@ -267,7 +270,7 @@ function ESLParser:next_event()
 
     local key, val = ut.split_first(line, "%s*:%s*")
     if not val then
-      return nil, GNTPError_EPROTO("invalid header: " .. line)
+      return nil, ESLError(ESLError.EPROTO, "invalid header: " .. line)
     end
 
     headers[key] = decodeURI(val)
