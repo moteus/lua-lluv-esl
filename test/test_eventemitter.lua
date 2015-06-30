@@ -143,6 +143,21 @@ it('should match', function()
   assert_equal(2, called2(0))
 end)
 
+it('should match top wildcard', function()
+  local called1 = counter()
+  local called2 = counter()
+  emitter:on('*', function() called1() end)
+  emitter:on('::*', function() called2() end)
+
+  emitter:emit('A')
+  assert_equal(1, called1(0))
+  assert_equal(1, called2(0))
+
+  emitter:emit('A::B')
+  assert_equal(2, called1(0))
+  assert_equal(2, called2(0))
+end)
+
 end
 
 

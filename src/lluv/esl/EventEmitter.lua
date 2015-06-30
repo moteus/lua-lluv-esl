@@ -110,18 +110,12 @@ function TreeEventEmitter:__init(sep, wildcard)
   return self
 end
 
-local function find_emitter(self, event, tree, cb, ...)
+local function find_emitter(self, event, node, cb, ...)
   local name, tail = ut.split_first(event, self._sep, true)
   name = name:upper()
 
-  local node = tree[name] -- contain subtree and/or emitter
-  if not node then
-    node = {nil, nil}
-    tree[name] = node
-  end
-
   if tail and tail ~= self._wld then -- find in subtree
-    tree = node[1]
+    local tree = node[1]
     if not tree then
       tree = {}
       node[1] = tree
@@ -162,12 +156,9 @@ function TreeEventEmitter:off(event, ...)
   return self
 end
 
-local function do_emit(self, event, tree, ...)
+local function do_emit(self, event, node, ...)
   local name, tail = ut.split_first(event, self._sep, true)
   name = name:upper()
-
-  local node = tree[name]
-  if not node then return self end
 
   if node[2] then -- has emitter
     node[2]:emit(self._wld, ...)

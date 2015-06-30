@@ -323,23 +323,28 @@ local function encode_cmd(cmd, args)
   return cmd .. EOL
 end
 
-function ESLConnection:__init()
+function ESLConnection:__init(host, port, password)
   self.__base.__init(self)
 
-  self._host     = '127.0.0.1'
-  self._port     = 8021
-  self._pass     = 'ClueCon'
+  self._host     = host or '127.0.0.1'
+  self._port     = port or 8021
+  self._pass     = password or 'ClueCon'
   self._queue    = ut.Queue.new()
   self._parser   = ESLParser.new()
   self._bgjobs   = nil
   self._authed   = false
   self._cli      = nil
+  self._closing  = nil
   self._events   = {'BACKGROUND_JOB', 'CHANNEL_EXECUTE_COMPLETE'}
 
   return self
 end
 
 function ESLConnection:_close(err)
+  if self._closing then return end
+
+  self._closing = true
+
   self._cli:close()
 
   while true do
@@ -348,11 +353,17 @@ function ESLConnection:_close(err)
     fn(self, err)
   end
 
-  for jid, fn in pairs(self._bgjobs) do
-    fn(self, err)
+  if self._bgjobs then
+    for jid, fn in pairs(self._bgjobs) do
+      fn(self, err)
+    end
   end
 
   self._cli, self._bgjobs = nil
+
+  self._closing = nil
+
+  self:emit('esl::close', self, err)
 end
 
 function ESLConnection:close()
@@ -390,15 +401,16 @@ function ESLConnection:_on_event(event, headers)
       return
     end
 
-    self:emit(name, self, event, headers)
+    uuid = event:getHeader('Unique-ID') or event:getHeader('Core-UUID')
+    if uuid then name = name .. '::' .. uuid end
 
-    self:emit('*',  self, event, headers)
+    self:emit('esl::event::' .. name, self, event, headers)
 
     return
   end
 
   if ct == 'text/disconnect-notice' then
-    self._close('shutdown')
+    self:_close(ESLError(ESLError.ERESET, 'Connection was reset'))
   end
 
   if self._authed == nil then -- this is first event
@@ -411,10 +423,12 @@ end
 function ESLConnection:open(cb)
   if self._cli then return end
 
+  self._closing = nil
   self._cli = uv.tcp():connect(self._host, self._port, function(cli, err)
     if err then
-      self._cli = nil
-      return cb(self, err)
+      self:_close(err)
+      cb(self, err)
+      return
     end
 
     self._parser:reset()
@@ -434,14 +448,20 @@ function ESLConnection:open(cb)
       end
     end)
 
+    self:emit("esl:connect", self)
+
     self._queue:push(function(self, err, reply, headers)
       if err then self:_close(err)
-      elseif reply:getReplyOk('accepted') then
-        self._authed = true
-        return self:subscribe(self._events, function(self, err, reply)
-          if err then self:_close(err) end
-          cb(self, err)
-        end)
+      else
+        if reply:getReplyOk('accepted') then
+          self._authed = true
+          return self:subscribe(self._events, function(self, err)
+            if err then self:_close(err)
+            else self:emit("esl:open", self) end
+            cb(self, err, reply, headers)
+          end)
+        end
+        self:emit("esl:auth", self, self._authed, reply)
       end
       cb(self, err, reply, headers)
     end)
