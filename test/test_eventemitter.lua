@@ -114,7 +114,7 @@ local it = IT(_ENV or _M)
 local emitter
 
 function setup()
-  emitter = em.TreeEventEmitter.new()
+  emitter = em.TreeEventEmitter.new('::')
 end
 
 it('should calls handle only once', function()
@@ -151,11 +151,30 @@ it('should match top wildcard', function()
 
   emitter:emit('A')
   assert_equal(1, called1(0))
-  assert_equal(1, called2(0))
+  assert_equal(0, called2(0))
 
   emitter:emit('A::B')
   assert_equal(2, called1(0))
-  assert_equal(2, called2(0))
+  assert_equal(0, called2(0))
+end)
+
+it('shold ignore unmatched', function()
+  local called = counter()
+  local handler = function() called() end
+  emitter:on('A::*', handler)
+  emitter:emit('B')
+  assert_equal(0, called(0))
+  emitter:off('A::*', handler)
+
+  emitter:on('A::B::*', handler)
+  emitter:emit('A::C')
+  assert_equal(0, called(0))
+  emitter:off('A::B::*', handler)
+
+  emitter:on('A::B::C::*', handler)
+  emitter:emit('B::C')
+  assert_equal(0, called(0))
+  emitter:off('A::B::C::*', handler)
 end)
 
 end

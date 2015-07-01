@@ -2,7 +2,7 @@ if not ... then package.path = '..\\?.lua;' .. package.path end
 
 local uv           = require "lluv"
 local ut           = require "lluv.utils"
-local EventEmitter = require "lluv.esl.EventEmitter".TreeEventEmitter
+local EventEmitter = require "lluv.esl.EventEmitter".EventEmitter
 local ESLUtils     = require "lluv.esl.utils"
 local ESLError     = require "lluv.esl.error"
 local cjson        = require "cjson.safe"
@@ -324,7 +324,7 @@ local function encode_cmd(cmd, args)
 end
 
 function ESLConnection:__init(host, port, password)
-  self.__base.__init(self)
+  self.__base.__init(self, {wildcard = true, delimiter = '::'})
 
   self._host     = host or '127.0.0.1'
   self._port     = port or 8021
@@ -448,7 +448,7 @@ function ESLConnection:open(cb)
       end
     end)
 
-    self:emit("esl:connect", self)
+    self:emit("esl::connect", self)
 
     self._queue:push(function(self, err, reply, headers)
       if err then self:_close(err)
@@ -457,11 +457,11 @@ function ESLConnection:open(cb)
           self._authed = true
           return self:subscribe(self._events, function(self, err)
             if err then self:_close(err)
-            else self:emit("esl:open", self) end
+            else self:emit("esl::open", self) end
             cb(self, err, reply, headers)
           end)
         end
-        self:emit("esl:auth", self, self._authed, reply)
+        self:emit("esl::auth", self, self._authed, reply)
       end
       cb(self, err, reply, headers)
     end)
