@@ -11,6 +11,8 @@ local uuid         = require "uuid"
 
 local EOL = '\n'
 
+local function dummy()end
+
 local encodeURI, decodeURI = ESLUtils.encodeURI, ESLUtils.decodeURI
 local split_status = ESLUtils.split_status
 
@@ -423,6 +425,8 @@ end
 function ESLConnection:open(cb)
   if self._cli then return end
 
+  cb = cb or dummy
+
   self._closing = nil
   self._cli = uv.tcp():connect(self._host, self._port, function(cli, err)
     if err then
@@ -448,30 +452,31 @@ function ESLConnection:open(cb)
       end
     end)
 
-    self:emit("esl::connect", self)
-
     self._queue:push(function(self, err, reply, headers)
-      if err then self:_close(err)
-      else
-        if reply:getReplyOk('accepted') then
-          self._authed = true
-          return self:subscribe(self._events, function(self, err)
-            if err then self:_close(err)
-            else self:emit("esl::open", self) end
-            cb(self, err, reply, headers)
-          end)
-        end
-        self:emit("esl::auth", self, self._authed, reply)
+      if err then
+        self:_close(err)
+        return cb(self, err, reply, headers)
       end
-      cb(self, err, reply, headers)
+
+      if not reply:getReplyOk('accepted') then
+        err = ESLError(ESLError.EAUTH, "Auth fail: " .. reply:getHeader'Reply-Text')
+        self:_close(err)
+        return cb(self, err, reply, headers)
+      end
+
+      self._authed = true
+
+      return self:subscribe(self._events, function(self, err)
+        if err then self:_close(err)
+        else self:emit("esl::open", self, reply, headers) end
+        cb(self, err, reply, headers)
+      end)
     end)
 
   end)
 
   return self
 end
-
-local function dummy()end
 
 local function on_write_done(cli, err, self)
   if err then self:_close(err) end

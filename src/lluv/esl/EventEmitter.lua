@@ -81,7 +81,7 @@ function BasicEventEmitter:off(event, handler)
 end
 
 function BasicEventEmitter:emit(event, ...)
-  local list = self._handlers[event:upper()]
+  local list = self._handlers[event]
 
   if list then
     for i = #list, 1, -1 do
@@ -194,23 +194,28 @@ function EventEmitter:__init(opt)
 end
 
 function EventEmitter:on(...)
-  return self._impl:on(...)
+  self._impl:on(...)
+  return self
 end
 
 function EventEmitter:many(...)
-  return self._impl:many(...)
+  self._impl:many(...)
+  return self
 end
 
 function EventEmitter:once(...)
-  return self._impl:once(...)
+  self._impl:once(...)
+  return self
 end
 
 function EventEmitter:off(...)
-  return self._impl:off(...)
+  self._impl:off(...)
+  return self
 end
 
 function EventEmitter:emit(...)
-  return self._impl:emit(...)
+  self._impl:emit(...)
+  return self
 end
 
 end
