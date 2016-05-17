@@ -1,5 +1,6 @@
 local string = require "string"
 local ut     = require "lluv.utils"
+local uuid   = require "uuid"
 
 local utils = {}
 
@@ -267,6 +268,10 @@ end
 
 function utils.encodeURI(str)
   return (string.gsub(str, '[^A-Za-z0-9.%-\\/_: ]', char_to_hex))
+end
+
+function utils.uuid()
+  return uuid.new()
 end
 
 return utils

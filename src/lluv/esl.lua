@@ -2,12 +2,11 @@ if not ... then package.path = '..\\?.lua;' .. package.path end
 
 local uv           = require "lluv"
 local ut           = require "lluv.utils"
-local EventEmitter = require "lluv.esl.EventEmitter".EventEmitter
+local EventEmitter = require "EventEmitter".EventEmitter
 local ESLUtils     = require "lluv.esl.utils"
 local ESLError     = require "lluv.esl.error"
 local cjson        = require "cjson.safe"
 local lom          = require "lxp.lom"
-local uuid         = require "uuid"
 
 local EOL = '\n'
 
@@ -337,6 +336,7 @@ function ESLConnection:__init(host, port, password)
   self._authed   = false
   self._cli      = nil
   self._closing  = nil
+  self._filtered = nil
   self._events   = {'BACKGROUND_JOB', 'CHANNEL_EXECUTE_COMPLETE'}
 
   return self
@@ -349,21 +349,21 @@ function ESLConnection:_close(err)
 
   self._cli:close()
 
+  local cb_err = err or ESLError(ESLError.EINTR, 'user interrupt')
   while true do
     local fn = self._queue:pop()
     if not fn then break end
-    fn(self, err)
+    fn(self, cb_err)
   end
 
   if self._bgjobs then
     for jid, fn in pairs(self._bgjobs) do
-      fn(self, err)
+      fn(self, cb_err)
     end
   end
 
-  self._cli, self._bgjobs = nil
-
-  self._closing = nil
+  self._filtered, self._closing, self._cli, self._bgjobs = nil
+  self._authed = false
 
   self:emit('esl::close', self, err)
 end
@@ -379,9 +379,8 @@ local IS_EVENT = {
 }
 
 function ESLConnection:_on_event(event, headers)
-  if not event then
-    return self:_close(headers)
-  end
+
+  self:emit('esl::recv', event, headers)
 
   local ct = headers['Content-Type']
 
@@ -406,13 +405,13 @@ function ESLConnection:_on_event(event, headers)
     uuid = event:getHeader('Unique-ID') or event:getHeader('Core-UUID')
     if uuid then name = name .. '::' .. uuid end
 
-    self:emit('esl::event::' .. name, self, event, headers)
+    self:emit('esl::event::' .. name, event, headers)
 
     return
   end
 
   if ct == 'text/disconnect-notice' then
-    self:_close(ESLError(ESLError.ERESET, 'Connection was reset'))
+    self:emit('esl::error::io', ESLError(ESLError.ERESET, 'Connection was reset'))
   end
 
   if self._authed == nil then -- this is first event
@@ -428,11 +427,11 @@ function ESLConnection:open(cb)
   cb = cb or dummy
 
   self._closing = nil
+
   self._cli = uv.tcp():connect(self._host, self._port, function(cli, err)
     if err then
-      self:_close(err)
-      cb(self, err)
-      return
+      self:emit('esl::error::io', err)
+      return cb(self, err)
     end
 
     self._parser:reset()
@@ -440,13 +439,18 @@ function ESLConnection:open(cb)
     self._bgjobs = {}
 
     cli:start_read(function(cli, err, data)
-      if err then return self:_close(err) end
+      if err then
+        return self:emit('esl::error::io', err)
+      end
 
       self._parser:append(data)
 
       while true do
         local event, headers = self._parser:next_event()
-        if not event then return self:_close(headers) end
+        if not event then
+          self:emit('esl::error', headers)
+          return self:_close()
+        end
         if event == true then return end
         self:_on_event(event, headers)
       end
@@ -454,32 +458,32 @@ function ESLConnection:open(cb)
 
     self._queue:push(function(self, err, reply, headers)
       if err then
-        self:_close(err)
+        self:emit('esl::error::io', err)
         return cb(self, err, reply, headers)
       end
 
       if not reply:getReplyOk('accepted') then
-        err = ESLError(ESLError.EAUTH, "Auth fail: " .. reply:getHeader'Reply-Text')
-        self:_close(err)
+        local ok, status, msg = reply:getReply()
+        err = ESLError(ESLError.EAUTH, msg or "Auth fail")
+        self:emit('esl::error', err)
         return cb(self, err, reply, headers)
       end
 
       self._authed = true
 
       return self:subscribe(self._events, function(self, err)
-        if err then self:_close(err)
-        else self:emit("esl::open", self, reply, headers) end
-        cb(self, err, reply, headers)
+        if err then self:emit('esl::error::io', err)
+        else self:emit("esl::open", reply, headers) end
+        return cb(self, err, reply, headers)
       end)
     end)
-
   end)
 
   return self
 end
 
 local function on_write_done(cli, err, self)
-  if err then self:_close(err) end
+  if err then self:emit('esl:error:io', err) end
 end
 
 function ESLConnection:sendRecv(cmd, args, cb)
@@ -487,6 +491,7 @@ function ESLConnection:sendRecv(cmd, args, cb)
     cb, args = args
   end
   local ev = encode_cmd(cmd, args)
+  self:emit('esl::send', ev)
   self._cli:write(ev, on_write_done, self)
   self._queue:push(cb or dummy)
   return self
@@ -510,6 +515,10 @@ function ESLConnection:bgapi(cmd, args, cb)
 
   local function on_command(self, err, reply)
     if err or not reply:getReplyOk() then
+
+      if err then self:emit('esl::error::io', err)
+      else self:emit('esl::error', err) end
+
       return cb(self, err, reply)
     end
 
@@ -521,10 +530,10 @@ function ESLConnection:bgapi(cmd, args, cb)
   end
 
   if self._filtered then
-    job_id = uuid.new()
+    job_id = ESLUtils.uuid()
     return self:filter('Job-UUID', job_id, function(self, err, reply)
       if err then return cb(self, err, reply) end
-      self:sendRecv(bgcmd, {['Job-UUID'] = job_id}, on_command)
+      return self:sendRecv(bgcmd, {['Job-UUID'] = job_id}, on_command)
     end)
   end
 
@@ -543,15 +552,16 @@ end
 
 local function filterDelete(self, header, value, cb)
   self._filtered = true
-  return self:sendRecv('filter delete ' .. header .. ' ' .. value, cb)
+  return self:sendRecv('filter delete ' .. header .. (value and (' ' .. value) or ''), cb)
 end
 
 local function filter_impl(self, fn, header, value, cb)
   if type(header) == 'table' then
-    cb = value or dummy
+    cb = cb or value or dummy
 
     local t = {}
     for k, v in pairs(header) do
+      if type(k) == 'number' then k = 'Event-Name' end
       if type(v) == 'table' then
         for i = 1, #v do
           t[#t + 1] = {k, v[i]}
@@ -574,6 +584,10 @@ local function filter_impl(self, fn, header, value, cb)
     return next_filter(self)
   end
 
+  if type(value) == 'function' then
+    header, value, cb = 'Event-Name', header, value
+  end
+
   return fn(self, header, value, cb)
 end
 
@@ -590,7 +604,7 @@ function ESLConnection:filterDelete(header, value, cb)
     cb, value = value
   end
 
-  return filter_impl(self, filterDelete, header, value or '', cb)
+  return filter_impl(self, filterDelete, header, value, cb)
 end
 
 function ESLConnection:events(etype, events, cb)
