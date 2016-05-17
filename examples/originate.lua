@@ -131,6 +131,11 @@ function Originate:dial(dial_string, app)
 
   cnn:bgapi(cmd, function(self, err, event, headers)
     if state == 'originate' then state = 'ringing' end
+
+    if not next(channels) then
+      cleanup()
+      this:emit('end', event)
+    end
   end)
 end
 
@@ -175,7 +180,7 @@ cnn:open(function(self, err)
   end)
 
   originate:on('end', function(self, eventName, event)
-    print('Hangup:', event:getHeader('Channel-Name'), event:getHeader('Hangup-Cause'))
+    print('Hangup:', event:getHeader('Channel-Name') or event:getBody(), event:getHeader('Hangup-Cause'))
     cnn:close()
   end)
 
