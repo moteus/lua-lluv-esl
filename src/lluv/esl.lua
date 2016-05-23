@@ -1,5 +1,3 @@
-if not ... then package.path = '..\\?.lua;' .. package.path end
-
 local uv           = require "lluv"
 local ut           = require "lluv.utils"
 local EventEmitter = require "EventEmitter".EventEmitter

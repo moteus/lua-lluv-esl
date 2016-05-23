@@ -51,7 +51,7 @@ function Originate:dial(dial_string, app)
   local cleanup
 
   local on_channel_create = function(self, _, event)
-    if session_uuid ~= event:getHeader('variable_x_session_uuid') then return end
+    if session_uuid ~= event:getVariable('x_session_uuid') then return end
     local uuid = event:getHeader('Unique-ID')
     channels[uuid] = true
 
@@ -59,7 +59,7 @@ function Originate:dial(dial_string, app)
   end
 
   local on_channel_destroy = function(self, _, event)
-    if session_uuid ~= event:getHeader('variable_x_session_uuid') then return end
+    if session_uuid ~= event:getVariable('x_session_uuid') then return end
 
     local uuid = event:getHeader('Unique-ID')
     channels[uuid] = nil
@@ -75,7 +75,7 @@ function Originate:dial(dial_string, app)
   end
 
   local on_channel_answer = function(self, _, event)
-    if session_uuid ~= event:getHeader('variable_x_session_uuid') then return end
+    if session_uuid ~= event:getVariable('x_session_uuid') then return end
 
     state = 'answer'
 
@@ -83,19 +83,19 @@ function Originate:dial(dial_string, app)
   end
 
   local on_channel_execute = function(self, _, event)
-    if session_uuid ~= event:getHeader('variable_x_session_uuid') then return end
+    if session_uuid ~= event:getVariable('x_session_uuid') then return end
 
     this:emit('execute', event)
   end
 
   local on_channel_execute_complite = function(self, _, event)
-    if session_uuid ~= event:getHeader('variable_x_session_uuid') then return end
+    if session_uuid ~= event:getVariable('x_session_uuid') then return end
 
     this:emit('execute_complete', event)
   end
 
   local on_channel_dtmf = function(self, _, event)
-    if session_uuid ~= event:getHeader('variable_x_session_uuid') then return end
+    if session_uuid ~= event:getVariable('x_session_uuid') then return end
 
     this:emit('dtmf', event)
   end
