@@ -19,7 +19,7 @@ dependencies = {
   "lua >= 5.1, < 5.4",
   "lluv",
   "eventemitter",
-  "cjson",
+  "lua-cjson",
   "luaexpat",
   "luuid",
   
@@ -31,10 +31,8 @@ build = {
   type = "builtin",
 
   modules = {
-    ["tpdu"          ] = "src/lua/tpdu.lua",
-    ["tpdu.bit"      ] = "src/lua/tpdu/bit.lua",
-    ["tpdu.bcd"      ] = "src/lua/tpdu/bcd.lua",
-    ["tpdu.bit7"     ] = "src/lua/tpdu/bit7.lua",
-    ["tpdu.utils"    ] = "src/lua/tpdu/utils.lua",
+    ["lluv.esl"           ] = "src/lluv/esl.lua",
+    ["lluv.esl.error"     ] = "src/lluv/esl/error.lua",
+    ["lluv.esl.utils"     ] = "src/lluv/esl/utils.lua",
   }
 }
