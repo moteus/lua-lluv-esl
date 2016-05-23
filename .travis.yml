@@ -11,6 +11,11 @@ addons:
       - libexpat1-dev
       - uuid-dev
 
+cache:
+  directories:
+    - here
+    - $HOME/.cache/pip
+
 matrix:
   include:
     - compiler: ": Lua51"
