@@ -322,20 +322,36 @@ local function encode_cmd(cmd, args)
   return cmd .. EOL
 end
 
+local function is_socket(s)
+  return ((type(s) == 'userdata')or(type(s) == 'userdata')) and s.start_read and s
+end
+
+local function on_write_done(cli, err, self)
+  if err then self:emit('esl:error:io', err) end
+end
+
 function ESLConnection:__init(host, port, password)
   self.__base.__init(self, {wildcard = true, delimiter = '::'})
 
-  self._host     = host or '127.0.0.1'
-  self._port     = port or 8021
-  self._pass     = password or 'ClueCon'
-  self._queue    = ut.Queue.new()
-  self._parser   = ESLParser.new()
-  self._bgjobs   = nil
-  self._authed   = false
-  self._cli      = nil
-  self._closing  = nil
-  self._filtered = nil
-  self._events   = {'BACKGROUND_JOB', 'CHANNEL_EXECUTE_COMPLETE'}
+  local cli = is_socket(host)
+  if cli then host, port = cli:getpeername() end
+
+  self._inbound   = not cli
+  self._host      = host or '127.0.0.1'
+  self._port      = port or 8021
+  self._pass      = password or 'ClueCon'
+  self._queue     = ut.Queue.new()
+  self._parser    = ESLParser.new()
+  self._bgjobs    = nil
+  self._authed    = false
+  self._cli       = cli
+  self._closing   = nil
+  self._filtered  = nil
+  self._async     = nil
+  self._lock      = nil
+  self._events    = {'BACKGROUND_JOB', 'CHANNEL_EXECUTE_COMPLETE'}
+  self._callbacks = {}
+  self._handlers  = {}
 
   return self
 end
@@ -383,7 +399,7 @@ function ESLConnection:_on_event(event, headers)
   local ct = headers['Content-Type']
 
   if ct == 'command/reply' or ct == 'api/response' then
-    cb = self._queue:pop()
+    local cb = self._queue:pop()
     return cb(self, nil, event, headers)
   end
 
@@ -420,13 +436,16 @@ function ESLConnection:_on_event(event, headers)
 end
 
 function ESLConnection:open(cb)
-  if self._cli then return end
+  if self._inbound then
+    if self._cli then return end
+    self._cli = uv.tcp();
+  end
 
   cb = cb or dummy
 
   self._closing = nil
 
-  self._cli = uv.tcp():connect(self._host, self._port, function(cli, err)
+  local on_connect = function(cli, err)
     if err then
       self:emit('esl::error::io', err)
       return cb(self, err)
@@ -446,7 +465,7 @@ function ESLConnection:open(cb)
       while true do
         local event, headers = self._parser:next_event()
         if not event then
-          self:emit('esl::error', headers)
+          self:emit('esl::error::parser', headers)
           return self:_close()
         end
         if event == true then return end
@@ -460,14 +479,21 @@ function ESLConnection:open(cb)
         return cb(self, err, reply, headers)
       end
 
-      if not reply:getReplyOk('accepted') then
-        local ok, status, msg = reply:getReply()
-        err = ESLError(ESLError.EAUTH, msg or "Auth fail")
-        self:emit('esl::error', err)
+      if self._inbound then
+        if not reply:getReplyOk('accepted') then
+          local ok, status, msg = reply:getReply()
+          err = ESLError(ESLError.EAUTH, msg or "Auth fail")
+          self:emit('esl::error::auth', err)
+          return cb(self, err, reply, headers)
+        end
+        self._authed = true
+      else
+        -- When FS connects to an "Event Socket Outbound" handler, 
+        -- it sends a "CHANNEL_DATA" event as the first event after the initial connection. 
+        -- getInfo() returns an ESLevent that contains this Channel Data.
+        self._channel_data = reply
         return cb(self, err, reply, headers)
       end
-
-      self._authed = true
 
       return self:subscribe(self._events, function(self, err)
         if err then self:emit('esl::error::io', err)
@@ -475,22 +501,32 @@ function ESLConnection:open(cb)
         return cb(self, err, reply, headers)
       end)
     end)
-  end)
+  end
+
+  if not self._inbound then
+    self:send('connect')
+    uv.defer(on_connect, self._cli)
+  else self._cli:connect(self._host, self._port, on_connect) end
 
   return self
 end
 
-local function on_write_done(cli, err, self)
-  if err then self:emit('esl:error:io', err) end
+function ESLConnection:getInfo()
+  return self._channel_data
+end
+
+function ESLConnection:send(cmd, args)
+  local ev = encode_cmd(cmd, args)
+  self:emit('esl::send', ev)
+  self._cli:write(ev, on_write_done, self)
+  return self
 end
 
 function ESLConnection:sendRecv(cmd, args, cb)
   if type(args) == 'function' then
     cb, args = args
   end
-  local ev = encode_cmd(cmd, args)
-  self:emit('esl::send', ev)
-  self._cli:write(ev, on_write_done, self)
+  self:send(cmd, args)
   self._queue:push(cb or dummy)
   return self
 end
@@ -504,7 +540,7 @@ function ESLConnection:bgapi(cmd, args, cb)
     cb, args = args
   end
 
-  if args and type(args) == 'table' then
+  if type(args) == 'table' then
     args = table.concat(args, ' ')
   end
 
@@ -536,6 +572,98 @@ function ESLConnection:bgapi(cmd, args, cb)
   end
 
   return self:sendRecv(bgcmd, on_command)
+end
+
+function ESLConnection:execute(...)
+  local async = not not self._async
+  local lock  = not not self._lock
+  return self:_execute(async, lock, 'execute', ...)
+end
+
+function ESLConnection:executeLock(...)
+  local async = not not self._async
+  local lock  = not not self._lock
+  if lock == nil then lock = true end
+  return self:_execute(async, lock, 'execute', ...)
+end
+
+function ESLConnection:executeAsync(...)
+  local async = self._async
+  if async == nil then async = true end
+  local lock  = not not self._lock
+  return self:_execute(async, lock, 'execute', ...)
+end
+
+function ESLConnection:executeAsyncLock(...)
+  local async = self._async
+  if async == nil then async = true end
+  local lock  = not not self._lock
+  if lock == nil then lock = true end
+  return self:_execute(async, lock, 'execute', ...)
+end
+
+function ESLConnection:_execute(async, lock, cmd, app, args, uuid, cb)
+  if type(args) == 'function' then
+    cb, args, uuid = args
+  end
+
+  if type(uuid) == 'function' then
+    cb, uuid = uuid
+  end
+
+  if type(args) == 'table' then
+    args = table.concat(args, ' ')
+  end
+
+  cb = cb or dummy
+
+  local event = {}
+  event['execute-app-name'] = app
+  event['execute-app-arg'] = args or '_undef_'
+
+  if self._inbound then
+    uuid = uuid or ESLUtils.uuid()
+  else
+    uuid = uuid or self:getInfo():getHeader('Unique-ID')
+  end
+
+  event['call-command'] = cmd;
+
+  if async then event['async'] = 'true' end
+  if lock  then event['event-lock'] = 'true' end
+
+  local command_uuid = ESLUtils.uuid()
+  event['Event-UUID'] = command_uuid
+  self._callbacks[command_uuid] = cb;
+
+  if not self._handlers[uuid] then
+    self._handlers[uuid] = function(self, name, event)
+      local command_uuid = event:getHeader('Application-UUID') or event:getHeader('Event-UUID')
+      local cb = command_uuid and self._callbacks[command_uuid]
+      if cb then
+        self._callbacks[command_uuid] = nil
+        cb(self, nil, event)
+      end
+    end
+    self:on("esl::event::CHANNEL_EXECUTE_COMPLETE::" .. uuid, self._handlers[uuid])
+  end
+
+  self:sendRecv('sendmsg ' .. uuid, event, function(self, err, event)
+    if err then
+      self._callbacks[command_uuid] = nil
+      cb(self, err)
+    end
+  end)
+end
+
+function ESLConnection:setAsyncExecute(value)
+  self._async = value
+  return self
+end
+
+function ESLConnection:setEventLock(value)
+  self._lock = value
+  return self
 end
 
 local function filter(self, header, value, cb)
@@ -603,6 +731,10 @@ function ESLConnection:filterDelete(header, value, cb)
   end
 
   return filter_impl(self, filterDelete, header, value, cb)
+end
+
+function ESLConnection:myevents(cb)
+  return self:sendRecv('myevents', cb)
 end
 
 function ESLConnection:events(etype, events, cb)
