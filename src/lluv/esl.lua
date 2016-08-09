@@ -390,6 +390,7 @@ local IS_EVENT = {
   ['text/event-plain'] = true;
   ['text/event-json']  = true;
   ['text/event-xml']   = true;
+  ['log/data']         = true;
 }
 
 function ESLConnection:_on_event(event, headers)
@@ -405,6 +406,11 @@ function ESLConnection:_on_event(event, headers)
 
   if IS_EVENT[ct] then
     local name = event:type()
+    if not name then
+      if ct == 'log/data' then
+        name = 'LOG'
+      else name = '__UNKNOWN__' end
+    end
 
     if name == 'BACKGROUND_JOB' then
       local jid = event:getHeader('Job-UUID')
@@ -533,6 +539,14 @@ end
 
 function ESLConnection:api(cmd, ...)
   return self:sendRecv('api ' .. cmd, ...)
+end
+
+function ESLConnection:log(lvl, ...)
+  return self:sendRecv('log ' .. lvl, ...)
+end
+
+function ESLConnection:nolog(...)
+  return self:sendRecv('nolog', ...)
 end
 
 function ESLConnection:bgapi(cmd, args, cb)
