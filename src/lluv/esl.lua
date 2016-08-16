@@ -361,7 +361,7 @@ function ESLConnection:_close(err)
 
   self._closing = true
 
-  self._cli:close()
+  if self._cli then self._cli:close() end
 
   local cb_err = err or ESLError(ESLError.EINTR, 'user interrupt')
   while true do
@@ -512,7 +512,10 @@ function ESLConnection:open(cb)
   if not self._inbound then
     self:send('connect')
     uv.defer(on_connect, self._cli)
-  else self._cli:connect(self._host, self._port, on_connect) end
+  else 
+    local ok, err = self._cli:connect(self._host, self._port, on_connect)
+    if not ok then uv.defer(on_connect, self._cli, err) end
+  end
 
   return self
 end
@@ -780,5 +783,7 @@ end
 end
 
 return {
-  Connection = ESLConnection.new
+  Event      = ESLEvent.new;
+  Parser     = ESLParser.new;
+  Connection = ESLConnection.new;
 }
