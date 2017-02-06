@@ -10,6 +10,21 @@ local EOL = '\n'
 
 local function dummy()end
 
+local function call_q(q, ...)
+  while true do
+    local cb = q:pop()
+    if not cb then break end
+    cb(...)
+  end
+end
+
+local function is_callable(f)
+  return (type(f) == 'function') and f
+end
+
+local EOF      = uv.error("LIBUV", uv.EOF)
+local ENOTCONN = uv.error('LIBUV', uv.ENOTCONN)
+
 local encodeURI, decodeURI = ESLUtils.encodeURI, ESLUtils.decodeURI
 local split_status = ESLUtils.split_status
 
@@ -327,7 +342,10 @@ local function is_socket(s)
 end
 
 local function on_write_done(cli, err, self)
-  if err then self:emit('esl:error:io', err) end
+  if err then
+    self:emit('esl:error:io', err)
+    self:_close(err)
+  end
 end
 
 function ESLConnection:__init(host, port, password)
@@ -340,7 +358,6 @@ function ESLConnection:__init(host, port, password)
   self._host      = host or '127.0.0.1'
   self._port      = port or 8021
   self._pass      = password or 'ClueCon'
-  self._queue     = ut.Queue.new()
   self._parser    = ESLParser.new()
   self._bgjobs    = nil
   self._authed    = false
@@ -353,37 +370,60 @@ function ESLConnection:__init(host, port, password)
   self._callbacks = {}
   self._handlers  = {}
 
+  self._open_q    = ut.Queue.new()
+  self._close_q   = ut.Queue.new()
+  self._queue     = ut.Queue.new()
+  self._delay_q   = ut.Queue.new()
+
   return self
 end
 
-function ESLConnection:_close(err)
-  if self._closing then return end
+function ESLConnection:_close(err, cb)
+  if is_callable(err) then
+    cb, err = err
+  end
 
-  self._closing = true
+  if not self._cli then
+    if cb then uv.defer(cb, self) end
+    return
+  end
 
-  if self._cli then self._cli:close() end
+  if cb then self._close_q:push(cb) end
+
+  if self._cli:closed() or self._cli:closing() then
+    return
+  end
 
   local cb_err = err or ESLError(ESLError.EINTR, 'user interrupt')
-  while true do
-    local fn = self._queue:pop()
-    if not fn then break end
-    fn(self, cb_err)
-  end
+  self._cli:close(function()
+    self._cli = nil
 
-  if self._bgjobs then
-    for jid, fn in pairs(self._bgjobs) do
-      fn(self, cb_err)
+    call_q(self._open_q, self, cb_err)
+
+    call_q(self._queue,  self, cb_err)
+
+    if self._bgjobs then
+      for jid, fn in pairs(self._bgjobs) do
+        fn(self, cb_err)
+      end
     end
-  end
 
-  self._filtered, self._closing, self._cli, self._bgjobs = nil
-  self._authed = false
+    call_q(self._close_q, self, err)
 
-  self:emit('esl::close', self, err)
+    self._filtered, self._bgjobs = nil
+    self._authed = false
+
+    self:emit('esl::close', err)
+  end)
+
 end
 
-function ESLConnection:close()
-  self:_close()
+function ESLConnection:close(cb)
+  self:_close(nil, cb)
+end
+
+function ESLConnection:closed()
+  return not self._cli
 end
 
 local IS_EVENT = {
@@ -401,6 +441,7 @@ function ESLConnection:_on_event(event, headers)
 
   if ct == 'command/reply' or ct == 'api/response' then
     local cb = self._queue:pop()
+    assert(cb)
     return cb(self, nil, event, headers)
   end
 
@@ -431,31 +472,65 @@ function ESLConnection:_on_event(event, headers)
   end
 
   if ct == 'text/disconnect-notice' then
-    self:emit('esl::error::io', ESLError(ESLError.ERESET, 'Connection was reset'))
+    local err = ESLError(ESLError.ERESET, 'Connection was reset')
+    self:emit('esl::error::io', err)
+    return self:_close(err)
   end
 
   if self._authed == nil then -- this is first event
     assert(ct == 'auth/request')
     self._authed = false
-    return self._cli:write(encode_cmd("auth " .. self._pass))
+    return self:_write(encode_cmd("auth " .. self._pass))
   end
 end
 
-function ESLConnection:open(cb)
-  if self._inbound then
-    if self._cli then return end
-    self._cli = uv.tcp();
+local function on_ready(self, ...)
+  self._authed = true
+
+  self:emit('esl::ready')
+
+  while true do
+    local data = self._delay_q:pop()
+    if not data then break end
+    self:_write(data)
   end
 
-  cb = cb or dummy
+  call_q(self._open_q, self, nil, ...)
+end
 
-  self._closing = nil
+function ESLConnection:open(cb)
+  if self._authed then
+    -- we already connected
+    if cb then uv.defer(cb, self) end
+    return
+  end
 
-  local on_connect = function(cli, err)
+  if cb then self._open_q:push(cb) end
+
+  -- we not connected but we in connecting process
+  if self._cli then return end
+
+  if self._inbound then
+    self._cli = uv.tcp()
+  else
+    -- We really can not reconnect to Outbound connection
+    return uv.defer(cb, ENOTCONN)
+  end
+
+  if not self._inbound then
+    -- We have to response to FS
+    local cmd = encode_cmd('connect')
+    self:_write(cmd)
+    return uv.defer(on_connect, self._cli)
+  end
+
+  local function on_connect(cli, err)
     if err then
       self:emit('esl::error::io', err)
-      return cb(self, err)
+      return self:_close(err)
     end
+
+    self:emit('esl::connect')
 
     self._parser:reset()
     self._authed = nil
@@ -463,7 +538,10 @@ function ESLConnection:open(cb)
 
     cli:start_read(function(cli, err, data)
       if err then
-        return self:emit('esl::error::io', err)
+        if err ~= EOF then
+          self:emit('esl::error::io', err)
+        end
+        return self:_close(err)
       end
 
       self._parser:append(data)
@@ -472,49 +550,57 @@ function ESLConnection:open(cb)
         local event, headers = self._parser:next_event()
         if not event then
           self:emit('esl::error::parser', headers)
-          return self:_close()
+          return self:_close(headers)
         end
         if event == true then return end
         self:_on_event(event, headers)
       end
     end)
 
-    self._queue:push(function(self, err, reply, headers)
+    -- For Inbound connection FS response with `auth` response and
+    -- we send password (see _event_handle function).
+    -- After that FS response with auth result
+    --
+    -- For Outbound connection FS sends CHANNEL_DATA as first event
+    -- getInfo() returns an ESLevent that contains this Channel Data.
+    self._queue._q:push_front(function(self, err, reply, headers)
       if err then
         self:emit('esl::error::io', err)
-        return cb(self, err, reply, headers)
+        return self:_close(err)
       end
 
-      if self._inbound then
-        if not reply:getReplyOk('accepted') then
-          local ok, status, msg = reply:getReply()
-          err = ESLError(ESLError.EAUTH, msg or "Auth fail")
-          self:emit('esl::error::auth', err)
-          return cb(self, err, reply, headers)
-        end
-        self._authed = true
-      else
-        -- When FS connects to an "Event Socket Outbound" handler, 
-        -- it sends a "CHANNEL_DATA" event as the first event after the initial connection. 
-        -- getInfo() returns an ESLevent that contains this Channel Data.
+      if not self._inbound then
         self._channel_data = reply
-        return cb(self, err, reply, headers)
+        return on_ready(self, reply, headers)
       end
 
-      return self:subscribe(self._events, function(self, err)
-        if err then self:emit('esl::error::io', err)
-        else self:emit("esl::open", reply, headers) end
-        return cb(self, err, reply, headers)
+      if not reply:getReplyOk('accepted') then
+        local ok, status, msg = reply:getReply()
+        err = ESLError(ESLError.EAUTH, msg or "Auth fail")
+        self:emit('esl::error::auth', err)
+        return self:_close(err)
+      end
+
+      self:emit('esl::auth')
+
+      -- subscribe
+      -- we can not use regular function because we not ready yeat
+      -- so do command encode here
+      local cmd = encode_cmd('event plain ' .. table.concat(self._events, ' '))
+      self:_write(cmd)
+      self._queue._q:push_front(function(self, err, res)
+        if err then
+          self:emit('esl::error::io', err)
+          return self:_close(err)
+        end
+        return on_ready(self, reply, headers)
       end)
     end)
   end
 
-  if not self._inbound then
-    self:send('connect')
-    uv.defer(on_connect, self._cli)
-  else 
-    local ok, err = self._cli:connect(self._host, self._port, on_connect)
-    if not ok then uv.defer(on_connect, self._cli, err) end
+  local ok, err = self._cli:connect(self._host, self._port, on_connect)
+  if not ok then
+    return uv.defer(on_connect, self._cli, err)
   end
 
   return self
@@ -524,10 +610,22 @@ function ESLConnection:getInfo()
   return self._channel_data
 end
 
+function ESLConnection:_write(data)
+  self:emit('esl::send', data)
+  self._cli:write(data, on_write_done, self)
+end
+
 function ESLConnection:send(cmd, args)
+  if not self._cli then return nil, ENOTCONN end
+
   local ev = encode_cmd(cmd, args)
-  self:emit('esl::send', ev)
-  self._cli:write(ev, on_write_done, self)
+
+  if self._authed then
+    self:_write(ev)
+  else
+    self._delay_q:push(ev)
+  end
+
   return self
 end
 
@@ -535,8 +633,14 @@ function ESLConnection:sendRecv(cmd, args, cb)
   if type(args) == 'function' then
     cb, args = args
   end
-  self:send(cmd, args)
-  self._queue:push(cb or dummy)
+  local ok, err = self:send(cmd, args)
+  if not ok then
+    if cb then
+      uv.defer(cb, self, err)
+    end
+  else
+    self._queue:push(cb or dummy)
+  end
   return self
 end
 
@@ -566,9 +670,12 @@ function ESLConnection:bgapi(cmd, args, cb)
 
   local function on_command(self, err, reply)
     if err or not reply:getReplyOk() then
-
-      if err then self:emit('esl::error::io', err)
-      else self:emit('esl::error', err) end
+      if not err then
+        self:emit('esl::error', reply)
+        --! @fixme. This is protocol error.
+        -- we send bgapi and does not recv Job-UUID
+        -- We should reset connection
+      end
 
       return cb(self, err, reply)
     end
@@ -583,7 +690,9 @@ function ESLConnection:bgapi(cmd, args, cb)
   if self._filtered then
     job_id = ESLUtils.uuid()
     return self:filter('Job-UUID', job_id, function(self, err, reply)
-      if err then return cb(self, err, reply) end
+      if err then
+        return cb(self, err, reply)
+      end
       return self:sendRecv(bgcmd, {['Job-UUID'] = job_id}, on_command)
     end)
   end
@@ -779,6 +888,37 @@ end
 function ESLConnection:divertEvents(on, cb)
   return self:sendRecv('divert_events ' .. on and 'on' or 'off', cb)
 end
+
+end
+
+if false then
+
+local stp   = require"StackTracePlus"
+
+local cnn = ESLConnection.new()
+
+local pp = require "pp"
+
+cnn:on('esl::send', function(_, event, data)
+  print("SEND -------------------------------")
+  pp(data)
+  print("------------------------------------")
+end)
+
+cnn:on('esl::recv', function(_, event, data, h)
+  print("RECV -------------------------------")
+  pp(data)
+  pp(h)
+  print("------------------------------------")
+end)
+
+cnn:open(print)
+
+cnn:nolog(function(self, err, response, headers)
+  pp("NOLOG", response, headers)
+end)
+
+uv.run(stp.stacktrace)
 
 end
 

@@ -23,14 +23,15 @@ local ESLServer = function(host, port, cb)
       -- create client socket in same loop as server
       local cli, err = server:accept()
       if not cli then print("ACCEPT: ", err) else print("ACCEPT: ", cli:getpeername()) end
-      if cli then cb(cli) end
+      if cli then
+        local cnn = esl.Connection(cli)
+        cb(cnn)
+      end
     end))
   end)
 end
 
-ESLServer("*", 8885, function(cli)
-  local cnn = esl.Connection(cli)
-
+ESLServer("*", 8885, function(cnn)
   -- cnn:on("esl::send", function(self, event, msg) print("SEND", msg) end)
   -- cnn:on("esl::recv", function(self, name, event) print("RECV", event:getHeader('Event-Name')) print(event:encode()) end)
 
@@ -51,8 +52,10 @@ ESLServer("*", 8885, function(cli)
   end)
 
   cnn:on("esl::error::**", function(self, name, err)
+    print("ERROR", name, err)
+  end)
+  cnn:on("esl::close", function(self, name, err)
     print("CLOSE", name, err)
-    cnn:close()
   end)
 end)
 

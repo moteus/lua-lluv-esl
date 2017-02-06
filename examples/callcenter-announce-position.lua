@@ -4,8 +4,7 @@
 
 package.path = "..\\src\\?.lua;" .. package.path
 
-local mseconds  = 20000
-local reconnect = 10000
+local reconnect_interval = 10000
 
 local uv  = require "lluv"
 local ut  = require "lluv.utils"
@@ -45,36 +44,44 @@ local function notify_all_q()
   end)
 end
 
-local q_timer, c_timer
+local function esl_reconnect(cnn, interval, on_connect, on_disconnect)
+  local timer = uv.timer():start(0, interval, function(self)
+    self:stop()
+    cnn:open()
+  end):stop()
 
-cnn:on("esl::open", function()
+  local connected = true
+
+  cnn:on('esl::close', function(self, event, ...)
+    local flag = connected
+
+    connected = false
+
+    if flag then on_disconnect(self, ...) end
+
+    if timer:closed() or timer:closing() then
+      return
+    end
+
+    timer:again()
+  end)
+
+  cnn:on('esl::ready', function(self, event, ...)
+    connected = true
+    on_connect(self, ...)
+  end)
+
+  if cnn:closed() then
+    cnn:open()
+  end
+
+  return timer
+end
+
+esl_reconnect(cnn, reconnect_interval, function(self)
   print("Connection done")
-
-  -- stop reconnect
-  if c_timer then
-    c_timer:close()
-    c_timer = nil
-  end
-
-  q_timer = uv.timer():start(0, mseconds, notify_all_q)
+end, function(self, err)
+  print(string.format('Disconnected  - %s', err and tostring(err) or 'NO ERROR'))
 end)
-
-cnn:on("esl::close", function(self, err)
-  print("Connection fail: ", err)
-
-  -- already connecting
-  if c_timer then return end
-
-  -- stop work
-  if q_timer then
-    q_timer:close()
-    q_timer = nil
-  end
-
-  print("Connection lost try connecting", err)
-  c_timer = uv.timer():start(reconnect, reconnect, function() cnn:open() end)
-end)
-
-cnn:open()
 
 uv.run()
