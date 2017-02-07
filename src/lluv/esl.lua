@@ -28,12 +28,43 @@ local ENOTCONN = uv.error('LIBUV', uv.ENOTCONN)
 local encodeURI, decodeURI = ESLUtils.encodeURI, ESLUtils.decodeURI
 local split_status = ESLUtils.split_status
 
+local CmdQueue = ut.class() do
+
+function CmdQueue:__init()
+  self._q = ut.List.new()
+  return self
+end
+
+function CmdQueue:reset()        self._q:reset()       return self end
+
+function CmdQueue:push_front(v)  self._q:push_front(v) return self end
+
+function CmdQueue:push(v)        self._q:push_back(v)  return self end
+
+function CmdQueue:pop()   return self._q:pop_front()               end
+
+function CmdQueue:peek()  return self._q:peek_front()              end
+
+function CmdQueue:size()  return self._q:size()                    end
+
+function CmdQueue:empty() return self._q:empty()                   end
+
+end 
+
 local ESLEvent = ut.class() do
 
 function ESLEvent:__init(headers, body)
-  self._headers = headers
-  self._body    = body or self._headers._body
-  self._headers._body = nil
+  if type(headers) == 'string' then
+    self._headers = {}
+    self:addHeader('Event-Name', headers)
+    if body then
+      self:addHeader('Event-Subclass', body)
+    end
+  else
+    self._headers = headers
+    self._body    = body or self._headers._body
+    self._headers._body = nil
+  end
 
   return self
 end
@@ -372,7 +403,7 @@ function ESLConnection:__init(host, port, password)
 
   self._open_q    = ut.Queue.new()
   self._close_q   = ut.Queue.new()
-  self._queue     = ut.Queue.new()
+  self._queue     = CmdQueue.new()
   self._delay_q   = ut.Queue.new()
 
   return self
@@ -463,7 +494,7 @@ function ESLConnection:_on_event(event, headers)
       return
     end
 
-    uuid = event:getHeader('Unique-ID') or event:getHeader('Core-UUID')
+    uuid = event:getHeader('Event-UUID') or event:getHeader('Unique-ID') or event:getHeader('Core-UUID')
     if uuid then name = name .. '::' .. uuid end
 
     self:emit('esl::event::' .. name, event, headers)
@@ -563,7 +594,7 @@ function ESLConnection:open(cb)
     --
     -- For Outbound connection FS sends CHANNEL_DATA as first event
     -- getInfo() returns an ESLevent that contains this Channel Data.
-    self._queue._q:push_front(function(self, err, reply, headers)
+    self._queue:push_front(function(self, err, reply, headers)
       if err then
         self:emit('esl::error::io', err)
         return self:_close(err)
@@ -588,7 +619,7 @@ function ESLConnection:open(cb)
       -- so do command encode here
       local cmd = encode_cmd('event plain ' .. table.concat(self._events, ' '))
       self:_write(cmd)
-      self._queue._q:push_front(function(self, err, res)
+      self._queue:push_front(function(self, err, res)
         if err then
           self:emit('esl::error::io', err)
           return self:_close(err)
@@ -630,7 +661,7 @@ function ESLConnection:send(cmd, args)
 end
 
 function ESLConnection:sendRecv(cmd, args, cb)
-  if type(args) == 'function' then
+  if is_callable(args) then
     cb, args = args
   end
   local ok, err = self:send(cmd, args)
@@ -642,6 +673,10 @@ function ESLConnection:sendRecv(cmd, args, cb)
     self._queue:push(cb or dummy)
   end
   return self
+end
+
+function ESLConnection:sendEvent(event, cb)
+  self:sendRecv('sendevent ' .. event:type() .. '\n' .. event:encode(), cb);
 end
 
 function ESLConnection:api(cmd, ...)
@@ -729,11 +764,11 @@ function ESLConnection:executeAsyncLock(...)
 end
 
 function ESLConnection:_execute(async, lock, cmd, app, args, uuid, cb)
-  if type(args) == 'function' then
+  if is_callable(args) then
     cb, args, uuid = args
   end
 
-  if type(uuid) == 'function' then
+  if is_callable(uuid) then
     cb, uuid = uuid
   end
 
@@ -771,13 +806,16 @@ function ESLConnection:_execute(async, lock, cmd, app, args, uuid, cb)
         cb(self, nil, event)
       end
     end
-    self:on("esl::event::CHANNEL_EXECUTE_COMPLETE::" .. uuid, self._handlers[uuid])
+    self:once("esl::event::CHANNEL_EXECUTE_COMPLETE::" .. uuid, self._handlers[uuid])
   end
 
   self:sendRecv('sendmsg ' .. uuid, event, function(self, err, event)
     if err then
       self._callbacks[command_uuid] = nil
       cb(self, err)
+    end
+    if not event:getReplyOk() then
+      cb(self, err, event)
     end
   end)
 end
@@ -875,7 +913,7 @@ function ESLConnection:events(etype, events, cb)
   end
 
   if events ~= 'ALL' then
-    events = events .. ' ' .. table.concat(self._events, ' ')
+    events = table.concat(self._events, ' ') .. ' ' ..events
   end
 
   return self:sendRecv('event ' .. etype .. ' ' .. events, cb)
