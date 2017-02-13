@@ -150,6 +150,8 @@ function ESLEvent:getBody()
 end
 
 function ESLEvent:addBody(body, type)
+  self:delBody()
+
   self._body = (self._body or '') .. body
   if type then self:addHeader('Content-Type', type) end
 
@@ -159,6 +161,7 @@ end
 function ESLEvent:delBody()
   self._body = nil
   self:delHeader('Content-Type')
+  self:delHeader('Content-Length')
 
   return self
 end
@@ -861,17 +864,18 @@ local function filter_impl(self, fn, header, value, cb)
       end
     end
 
-    local function next_filter(self, err, reply)
-      if err then return cb(self, err) end
-
-      local r = t[#t]
-      if not r then return cb(self, nil, reply) end
-      t[#t] = nil
-
-      return fn(self, r[1], r[2], next_filter)
+    local n, first_err = #t
+    for i = 1, #t do
+      local r = t[i]
+      fn(self, r[1], r[2], function(self, err, reply)
+        n = n - 1
+        first_err = first_err or err
+        if n == 0 then cb(self, err or first_err, reply) end
+      end)
     end
+    if n == 0 then uv.defer(cb, self) end
 
-    return next_filter(self)
+    return self
   end
 
   if type(value) == 'function' then
