@@ -360,8 +360,16 @@ local function encode_cmd(cmd, args)
   cmd = cmd .. EOL
   if args then
     if type(args) == "table" then
+      local _body
       for k, v in pairs(args) do
-        cmd = cmd .. k .. ": " .. encodeURI(v) .. EOL
+        if k ~= '_body' then
+          cmd = cmd .. k .. ": " .. encodeURI(v) .. EOL
+        end
+      end
+      if args._body then
+        cmd = cmd .. 
+          'Content-Length: ' .. tostring(#args._body) .. EOL ..
+          EOL .. args._body
       end
     else
       cmd = cmd .. args .. EOL
@@ -782,16 +790,23 @@ function ESLConnection:_execute(async, lock, cmd, app, args, uuid, cb)
   cb = cb or dummy
 
   local event = {}
+  event['call-command']     = cmd
   event['execute-app-name'] = app
-  event['execute-app-arg'] = args or '_undef_'
+
+  if not args then 
+    event['execute-app-arg'] = '_undef_'
+  elseif not string.find(args, '[%z\n\r]') then
+    event['execute-app-arg'] = args
+  else
+    event['Content-Type'] = 'text/plain'
+    event._body = args
+  end
 
   if self._inbound then
     uuid = uuid or ESLUtils.uuid()
   else
     uuid = uuid or self:getInfo():getHeader('Unique-ID')
   end
-
-  event['call-command'] = cmd;
 
   if async then event['async'] = 'true' end
   if lock  then event['event-lock'] = 'true' end
