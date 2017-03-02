@@ -295,6 +295,12 @@ function utils.super(self, m, ...)
   return self
 end
 
+function utils.is_in(v, t)
+  for i = 1, #t do
+    if t[i] == v then return i end
+  end
+end
+
 function utils.append_uniq(t, v)
   for i = 1, #t do
     if t[i] == v then return t end

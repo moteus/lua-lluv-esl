@@ -14,7 +14,7 @@ local encodeURI, decodeURI = ESLUtils.encodeURI, ESLUtils.decodeURI
 local split_status = ESLUtils.split_status
 local dummy, call_q, is_callable = ESLUtils.dummy, ESLUtils.call_q, ESLUtils.is_callable
 local super = ESLUtils.super
-local append_uniq = ESLUtils.append_uniq
+local append_uniq, is_in = ESLUtils.append_uniq, ESLUtils.is_in
 
 local CmdQueue = ut.class() do
 
@@ -377,6 +377,8 @@ local function on_write_done(cli, err, self)
     self:_close(err)
   end
 end
+
+local required_events = {'BACKGROUND_JOB', 'CHANNEL_EXECUTE_COMPLETE'}
 
 function ESLConnection:__init(host, port, password)
   self = super(self, '__init', {wildcard = true, delimiter = '::'})
@@ -908,22 +910,25 @@ function ESLConnection:myevents(cb)
   return self:sendRecv('myevents', cb)
 end
 
-function ESLConnection:events(etype, events, cb)
-  if type(events) == 'function' then
-    cb, events = events
-  end
-
-  events = events or 'ALL'
-
+local function build_events(events)
   if type(events) == 'table' then
-    local regular, custom = {}, {}
-    for _, event in ipairs(events) do
-      local base, sub = ut.split_first(event, '::', true)
-      if base == 'CUSTOM' then
-        append_uniq(custom, base)
-        if sub then append_uniq(custom, sub) end
-      else
-        append_uniq(regular, event)
+    if is_in('ALL', events) then
+      events = 'ALL'
+    else
+      local regular, custom = {}, {}
+      for _, event in ipairs(events) do
+        -- handle 'CUSTOM SMS::MESSAGE' and 'CUSTOM::SMS::MESSAGE'
+        local base, sub = ut.split_first(event, '%s+')
+        if not sub then base, sub = ut.split_first(event, '::', true) end
+
+        if not is_in(base, required_events) then
+          if base == 'CUSTOM' then
+            append_uniq(custom, base)
+            if sub then append_uniq(custom, sub) end
+          else
+            append_uniq(regular, event)
+          end
+        end
       end
     end
 
@@ -938,11 +943,27 @@ function ESLConnection:events(etype, events, cb)
     end
   end
 
+  return events or 'ALL'
+end
+
+function ESLConnection:events(etype, events, cb)
+  if type(events) == 'function' then
+    cb, events = events
+  end
+
+  events = build_events(events)
+
   if events ~= 'ALL' then
-    events = table.concat(self._events, ' ') .. ' ' ..events
+    events = table.concat(self._events, ' ') .. ' ' .. events
   end
 
   return self:sendRecv('event ' .. etype .. ' ' .. events, cb)
+end
+
+-- this command unsubscribe from all events and also
+-- flush all pending events. So use is very carefully.
+function ESLConnection:noevents(cb)
+  return self:sendRecv('noevents', cb)
 end
 
 function ESLConnection:subscribe(events, cb)
