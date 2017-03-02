@@ -274,4 +274,34 @@ function utils.uuid()
   return uuid.new()
 end
 
+function utils.dummy() end
+
+function utils.call_q(q, ...)
+  while true do
+    local cb = q:pop()
+    if not cb then break end
+    cb(...)
+  end
+end
+
+function utils.is_callable(f)
+  return (type(f) == 'function') and f
+end
+
+function utils.super(self, m, ...)
+  if self.__base and self.__base[m] then
+    return self.__base[m](self, ...)
+  end
+  return self
+end
+
+function utils.append_uniq(t, v)
+  for i = 1, #t do
+    if t[i] == v then return t end
+  end
+  t[#t + 1] = v
+  return t
+end
+
+
 return utils

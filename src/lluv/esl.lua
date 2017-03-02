@@ -6,27 +6,15 @@ local ESLError     = require "lluv.esl.error"
 local cjson        = require "cjson.safe"
 local lom          = require "lxp.lom"
 
-local EOL = '\n'
-
-local function dummy()end
-
-local function call_q(q, ...)
-  while true do
-    local cb = q:pop()
-    if not cb then break end
-    cb(...)
-  end
-end
-
-local function is_callable(f)
-  return (type(f) == 'function') and f
-end
-
+local EOL      = '\n'
 local EOF      = uv.error("LIBUV", uv.EOF)
 local ENOTCONN = uv.error('LIBUV', uv.ENOTCONN)
 
 local encodeURI, decodeURI = ESLUtils.encodeURI, ESLUtils.decodeURI
 local split_status = ESLUtils.split_status
+local dummy, call_q, is_callable = ESLUtils.dummy, ESLUtils.call_q, ESLUtils.is_callable
+local super = ESLUtils.super
+local append_uniq = ESLUtils.append_uniq
 
 local CmdQueue = ut.class() do
 
@@ -391,7 +379,7 @@ local function on_write_done(cli, err, self)
 end
 
 function ESLConnection:__init(host, port, password)
-  self.__base.__init(self, {wildcard = true, delimiter = '::'})
+  self = super(self, '__init', {wildcard = true, delimiter = '::'})
 
   local cli = is_socket(host)
   if cli then host, port = cli:getpeername() end
@@ -928,7 +916,26 @@ function ESLConnection:events(etype, events, cb)
   events = events or 'ALL'
 
   if type(events) == 'table' then
-    events = table.concat(events, ' ')
+    local regular, custom = {}, {}
+    for _, event in ipairs(events) do
+      local base, sub = ut.split_first(event, '::', true)
+      if base == 'CUSTOM' then
+        append_uniq(custom, base)
+        if sub then append_uniq(custom, sub) end
+      else
+        append_uniq(regular, event)
+      end
+    end
+
+    events = nil
+    if #regular > 0 then
+      events = table.concat(regular, ' ')
+    end
+
+    if #custom > 0 then
+      events = events and (events .. ' ') or ''
+      events = events .. table.concat(custom, ' ')
+    end
   end
 
   if events ~= 'ALL' then
