@@ -267,7 +267,7 @@ function utils.decodeURI(str)
 end
 
 function utils.encodeURI(str)
-  return (string.gsub(str, '[^A-Za-z0-9.%-\\/_:@ ]', char_to_hex))
+  return (string.gsub(str, '[^A-Za-z0-9.%-\\/_:@%[%]{}| ]', char_to_hex))
 end
 
 function utils.uuid()

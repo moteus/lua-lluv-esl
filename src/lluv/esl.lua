@@ -57,7 +57,9 @@ function ESLEvent:__init(headers, body)
   return self
 end
 
-function ESLEvent:encode(fmt)
+local function pass(...) return ... end
+
+function ESLEvent:encode(fmt, raw)
   if self._body then
     self:addHeader('Content-Length', tostring(#self._body))
   end
@@ -65,9 +67,9 @@ function ESLEvent:encode(fmt)
   fmt = fmt or 'plain'
 
   if fmt == 'plain' then
-    local data = {}
+    local data, encoder = {}, raw and pass or encodeURI
     for k, v in pairs(self._headers) do
-      data[#data + 1] = k .. ': ' .. encodeURI(v)
+      data[#data + 1] = k .. ': ' .. encoder(v)
     end
     data[#data + 1] = ''
     data[#data + 1] = self._body
@@ -106,6 +108,8 @@ function ESLEvent:encode(fmt)
 
   error('Unsupported format:' .. fmt)
 end
+
+ESLEvent.serialize = ESLEvent.encode
 
 function ESLEvent:getHeader(name)
   return self._headers[name]
@@ -348,16 +352,17 @@ local function encode_cmd(cmd, args)
   cmd = cmd .. EOL
   if args then
     if type(args) == "table" then
-      local _body
       for k, v in pairs(args) do
         if k ~= '_body' then
           cmd = cmd .. k .. ": " .. encodeURI(v) .. EOL
         end
       end
+
       if args._body then
-        cmd = cmd .. 
-          'Content-Length: ' .. tostring(#args._body) .. EOL ..
-          EOL .. args._body
+        return cmd .. 
+          'Content-Length: ' .. tostring(#args._body) ..
+          EOL .. EOL ..
+          args._body
       end
     else
       cmd = cmd .. args .. EOL
@@ -387,6 +392,7 @@ function ESLConnection:__init(host, port, password)
   if cli then host, port = cli:getpeername() end
 
   self._inbound   = not cli
+  self._opening   = nil
   self._host      = host or '127.0.0.1'
   self._port      = port or 8021
   self._pass      = password or 'ClueCon'
@@ -394,7 +400,6 @@ function ESLConnection:__init(host, port, password)
   self._bgjobs    = nil
   self._authed    = false
   self._cli       = cli
-  self._closing   = nil
   self._filtered  = nil
   self._async     = nil
   self._lock      = nil
@@ -438,6 +443,11 @@ function ESLConnection:_close(err, cb)
       for jid, fn in pairs(self._bgjobs) do
         fn(self, cb_err)
       end
+    end
+
+    for uuid, cb in pairs(self._callbacks) do
+      self._callbacks[uuid] = nil
+      cb(self, err)
     end
 
     call_q(self._close_q, self, err)
@@ -537,23 +547,26 @@ function ESLConnection:open(cb)
     return
   end
 
-  if cb then self._open_q:push(cb) end
-
-  -- we not connected but we in connecting process
-  if self._cli then return end
-
   if self._inbound then
+    if cb then self._open_q:push(cb) end
+
+    -- we not connected but we in connecting process
+    if self._cli then return end
+
     self._cli = uv.tcp()
   else
-    -- We really can not reconnect to Outbound connection
-    return uv.defer(cb, ENOTCONN)
-  end
+    if not self._cli then
+      -- We really can not reconnect to Outbound connection
+      if cb then uv.defer(cb, ENOTCONN) end
+      return 
+    end
 
-  if not self._inbound then
-    -- We have to response to FS
-    local cmd = encode_cmd('connect')
-    self:_write(cmd)
-    return uv.defer(on_connect, self._cli)
+    if cb then self._open_q:push(cb) end
+
+    -- this is really only one time check
+    -- so we do not need reset this flag again
+    if self._opening then return end
+    self._opening = true
   end
 
   local function on_connect(cli, err)
@@ -630,6 +643,13 @@ function ESLConnection:open(cb)
     end)
   end
 
+  if not self._inbound then
+    -- We have to response to FS
+    local cmd = encode_cmd('connect')
+    self:_write(cmd)
+    return uv.defer(on_connect, self._cli)
+  end
+
   local ok, err = self._cli:connect(self._host, self._port, on_connect)
   if not ok then
     return uv.defer(on_connect, self._cli, err)
@@ -677,7 +697,8 @@ function ESLConnection:sendRecv(cmd, args, cb)
 end
 
 function ESLConnection:sendEvent(event, cb)
-  self:sendRecv('sendevent ' .. event:type() .. '\n' .. event:encode(), cb);
+  -- ESL library send event without urlencode
+  self:sendRecv('sendevent ' .. event:type() .. '\n' .. event:encode('plain', true), cb);
 end
 
 function ESLConnection:api(cmd, ...)
@@ -736,6 +757,19 @@ function ESLConnection:bgapi(cmd, args, cb)
   return self:sendRecv(bgcmd, on_command)
 end
 
+function ESLConnection:hangup(cause, uuid, cb)
+  if is_callable(uuid) then
+    assert(not self._inbound)
+    cb, uuid = uuid, self:getInfo():getHeader('Unique-ID')
+  end
+
+  local event = {}
+  event['call-command'] = 'hangup'
+  event['hangup-cause'] = cause
+
+  self:sendRecv('sendmsg ' .. uuid, event, cb)
+end
+
 function ESLConnection:execute(...)
   local async = not not self._async
   local lock  = not not self._lock
@@ -764,7 +798,18 @@ function ESLConnection:executeAsyncLock(...)
   return self:_execute(async, lock, 'execute', ...)
 end
 
+local function execute_complite_handler(self, name, event)
+  local command_uuid = event:getHeader('Application-UUID') or event:getHeader('Event-UUID')
+  local cb = command_uuid and self._callbacks[command_uuid]
+  if cb then
+    self._callbacks[command_uuid] = nil
+    cb(self, nil, event)
+  end
+end
+
 function ESLConnection:_execute(async, lock, cmd, app, args, uuid, cb)
+  -- `sendmsg` doesn't need uuid arg when in outbound mode
+
   if is_callable(args) then
     cb, args, uuid = args
   end
@@ -774,6 +819,7 @@ function ESLConnection:_execute(async, lock, cmd, app, args, uuid, cb)
   end
 
   if type(args) == 'table' then
+    loops = args.loops
     args = table.concat(args, ' ')
   end
 
@@ -783,47 +829,61 @@ function ESLConnection:_execute(async, lock, cmd, app, args, uuid, cb)
   event['call-command']     = cmd
   event['execute-app-name'] = app
 
+  -- We should not use urlencode for args.
+  -- Not sure why but in other cases commands may not works.
+  -- ESL library do the same, but uses only header.
+  -- So I just always pass args as content.
   if not args then 
     event['execute-app-arg'] = '_undef_'
-  elseif not string.find(args, '[%z\n\r]') then
-    event['execute-app-arg'] = args
+
+  -- elseif (#args < 2048) and (not string.find(args, '[%z\n\r=,]')) then
+  --   event['execute-app-arg'] = args
+
   else
+    -- FS Book mentioned that need pass args more than 2048
+    -- as content, but not as header
     event['Content-Type'] = 'text/plain'
     event._body = args
   end
 
-  if self._inbound then
-    uuid = uuid or ESLUtils.uuid()
-  else
-    uuid = uuid or self:getInfo():getHeader('Unique-ID')
+  if loops then
+    event['loops'] = loops
+  end
+
+  if self._inbound and not uuid then
+    local err = ESLError(ESLError.EARGS, 'no uuid provided for Inbound connection')
+    return uv.defer(cb, self, err)
   end
 
   if async then event['async'] = 'true' end
   if lock  then event['event-lock'] = 'true' end
 
+  -- When we send `sendmsg uuid ....` to FS FS reply with
+  -- Content-Type: command/reply\r\nReply-Text: +OK
+  -- But execution is really not start yeat.
+  -- When application start execute FS send `CHANNEL_EXECUTE` event
+  -- When application done FS send CHANNEL_EXECUTE_COMPLETE.
+  -- To identify such events with specific command we send 
+  -- `Event-UUID` header and FS add its value as `Application-UUID`
+  -- Not sure where is documented.
+
   local command_uuid = ESLUtils.uuid()
   event['Event-UUID'] = command_uuid
   self._callbacks[command_uuid] = cb;
 
-  if not self._handlers[uuid] then
-    self._handlers[uuid] = function(self, name, event)
-      local command_uuid = event:getHeader('Application-UUID') or event:getHeader('Event-UUID')
-      local cb = command_uuid and self._callbacks[command_uuid]
-      if cb then
-        self._callbacks[command_uuid] = nil
-        cb(self, nil, event)
-      end
-    end
-    self:once("esl::event::CHANNEL_EXECUTE_COMPLETE::" .. uuid, self._handlers[uuid])
+  local channel_uuid = uuid or self:getInfo():getHeader('Unique-ID')
+  if not self._handlers[channel_uuid] then
+    self._handlers[channel_uuid] = execute_complite_handler
+    self:on("esl::event::CHANNEL_EXECUTE_COMPLETE::" .. channel_uuid, execute_complite_handler)
   end
 
-  self:sendRecv('sendmsg ' .. uuid, event, function(self, err, event)
+  self:sendRecv(uuid and ('sendmsg ' .. uuid) or 'sendmsg', event, function(self, err, reply)
     if err then
       self._callbacks[command_uuid] = nil
-      cb(self, err)
+      return cb(self, err)
     end
-    if not event:getReplyOk() then
-      cb(self, err, event)
+    if not reply:getReplyOk() then
+      cb(self, err, reply)
     end
   end)
 end
