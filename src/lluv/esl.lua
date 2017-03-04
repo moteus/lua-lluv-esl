@@ -385,6 +385,56 @@ end
 
 local required_events = {'BACKGROUND_JOB', 'CHANNEL_EXECUTE_COMPLETE'}
 
+local register_execute_complite_handler, remove_execute_complite_handler, remove_all_execute_complite_handler do
+
+local EVENT_NAME = "esl::event::CHANNEL_EXECUTE_COMPLETE::"
+
+local function execute_complite_handler(self, eventName, event)
+  local command_uuid = event:getHeader('Application-UUID')
+  local cb = command_uuid and self._callbacks[command_uuid]
+  if cb then
+    local channel_uuid = string.sub(eventName, #EVENT_NAME + 1)
+    remove_execute_complite_handler(self, channel_uuid, command_uuid)
+    cb(self, nil, event)
+  end
+end
+
+register_execute_complite_handler = function(self, channel_uuid, command_uuid, cb)
+  self._callbacks[command_uuid] = cb
+  if not self._handlers[channel_uuid] then
+    self._handlers[channel_uuid] = 1
+    self:on(EVENT_NAME .. channel_uuid, execute_complite_handler)
+  else
+    self._handlers[channel_uuid] = self._handlers[channel_uuid] + 1
+  end
+end
+
+remove_execute_complite_handler = function(self, channel_uuid, command_uuid)
+  if not self._handlers[channel_uuid] then
+    assert(not self._callbacks[command_uuid])
+    return
+  end
+
+  assert(self._handlers[channel_uuid] > 0)
+  assert(self._callbacks[command_uuid])
+
+  self._callbacks[command_uuid] = nil
+  self._handlers[channel_uuid] = self._handlers[channel_uuid] - 1
+  if self._handlers[channel_uuid] == 0 then
+    self._handlers[channel_uuid] = nil
+    self:off(EVENT_NAME .. channel_uuid, execute_complite_handler)
+  end
+end
+
+remove_all_execute_complite_handler = function(self)
+  for channel_uuid in pairs(self._handlers) do
+    self._handlers[channel_uuid] = nil
+    self:off(EVENT_NAME .. channel_uuid, execute_complite_handler)
+  end
+end
+
+end
+
 function ESLConnection:__init(host, port, password)
   self = super(self, '__init', {wildcard = true, delimiter = '::'})
 
@@ -444,6 +494,8 @@ function ESLConnection:_close(err, cb)
         fn(self, cb_err)
       end
     end
+
+    remove_all_execute_complite_handler(self)
 
     for uuid, cb in pairs(self._callbacks) do
       self._callbacks[uuid] = nil
@@ -798,15 +850,6 @@ function ESLConnection:executeAsyncLock(...)
   return self:_execute(async, lock, 'execute', ...)
 end
 
-local function execute_complite_handler(self, name, event)
-  local command_uuid = event:getHeader('Application-UUID') or event:getHeader('Event-UUID')
-  local cb = command_uuid and self._callbacks[command_uuid]
-  if cb then
-    self._callbacks[command_uuid] = nil
-    cb(self, nil, event)
-  end
-end
-
 function ESLConnection:_execute(async, lock, cmd, app, args, uuid, cb)
   -- `sendmsg` doesn't need uuid arg when in outbound mode
 
@@ -867,23 +910,15 @@ function ESLConnection:_execute(async, lock, cmd, app, args, uuid, cb)
   -- `Event-UUID` header and FS add its value as `Application-UUID`
   -- Not sure where is documented.
 
+  local channel_uuid = uuid or self:getInfo():getHeader('Unique-ID')
   local command_uuid = ESLUtils.uuid()
   event['Event-UUID'] = command_uuid
-  self._callbacks[command_uuid] = cb;
-
-  local channel_uuid = uuid or self:getInfo():getHeader('Unique-ID')
-  if not self._handlers[channel_uuid] then
-    self._handlers[channel_uuid] = execute_complite_handler
-    self:on("esl::event::CHANNEL_EXECUTE_COMPLETE::" .. channel_uuid, execute_complite_handler)
-  end
+  register_execute_complite_handler(self, channel_uuid, command_uuid, cb or dummy)
 
   self:sendRecv(uuid and ('sendmsg ' .. uuid) or 'sendmsg', event, function(self, err, reply)
-    if err then
-      self._callbacks[command_uuid] = nil
-      return cb(self, err)
-    end
-    if not reply:getReplyOk() then
-      cb(self, err, reply)
+    if err or not reply:getReplyOk() then
+      remove_execute_complite_handler(self, channel_uuid, command_uuid)
+      return cb(self, err, reply)
     end
   end)
 end
