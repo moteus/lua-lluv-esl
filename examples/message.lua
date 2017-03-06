@@ -105,15 +105,17 @@ local function sip_message(cnn, options, cb)
   return sip_message_continue(cnn, options, cb)
 end
 
-local cnn = esl.Connection()
-  :open()
+local cnn = esl.Connection{
   -- subscribe to result messages
-  :subscribe('CUSTOM SMS::SEND_MESSAGE')
+  subscribe = {'CUSTOM SMS::SEND_MESSAGE'};
   -- ignore not result messages
-  :filter{
+  filter    = {
     ["Nonblocking-Delivery"] = "true",
     ["Delivery-Failure"]     = {"true", "false"},
-  }
+  };
+}
+
+cnn:open()
 
 sip_message(cnn, {
   from         = from;

@@ -373,7 +373,7 @@ local function encode_cmd(cmd, args)
 end
 
 local function is_socket(s)
-  return ((type(s) == 'userdata')or(type(s) == 'userdata')) and s.start_read and s
+  return ((type(s) == 'userdata')or(type(s) == 'table')) and s.start_read and s
 end
 
 local function on_write_done(cli, err, self)
@@ -435,27 +435,107 @@ end
 
 end
 
+local function build_events(events)
+  if type(events) == 'table' then
+    if is_in('ALL', events) then
+      events = 'ALL'
+    else
+      local regular, custom = {}, {}
+      for _, event in ipairs(events) do
+        -- handle 'CUSTOM SMS::MESSAGE' and 'CUSTOM::SMS::MESSAGE'
+        local base, sub = ut.split_first(event, '%s+')
+        if not sub then base, sub = ut.split_first(event, '::', true) end
+
+        if not is_in(base, required_events) then
+          if base == 'CUSTOM' then
+            append_uniq(custom, base)
+            if sub then append_uniq(custom, sub) end
+          else
+            append_uniq(regular, event)
+          end
+        end
+      end
+
+      events = nil
+      if #regular > 0 then
+        events = table.concat(regular, ' ')
+      end
+
+      if #custom > 0 then
+        events = events and (events .. ' ') or ''
+        events = events .. table.concat(custom, ' ')
+      end
+    end
+  end
+
+  return events or 'ALL'
+end
+
+local function build_filter(header)
+  local t = {}
+  for k, v in pairs(header) do
+    if type(k) == 'number' then k = 'Event-Name' end
+    if type(v) == 'table' then
+      for i = 1, #v do
+        t[#t + 1] = {k, v[i]}
+      end
+    else
+      t[#t + 1] = {k, v}
+    end
+  end
+  return t
+end
+
 function ESLConnection:__init(host, port, password)
   self = super(self, '__init', {wildcard = true, delimiter = '::'})
 
-  local cli = is_socket(host)
-  if cli then host, port = cli:getpeername() end
+  local cli, options = is_socket(host)
+  if cli then
+    host, port = cli:getpeername()
+  elseif type(host) == 'table' then
+    options = host
+    cli = is_socket(options.socket or options[1])
+    if cli then
+      host, port = cli:getpeername()
+    else
+      host     = options.host     or options[1]
+      port     = options.port     or options[2]
+      password = options.password or options[3]
+    end
+  end
 
   self._inbound   = not cli
   self._opening   = nil
+  self._cli       = cli
   self._host      = host or '127.0.0.1'
   self._port      = port or 8021
   self._pass      = password or 'ClueCon'
   self._parser    = ESLParser.new()
   self._bgjobs    = nil
   self._authed    = false
-  self._cli       = cli
   self._filtered  = nil
   self._async     = nil
   self._lock      = nil
-  self._events    = {'BACKGROUND_JOB', 'CHANNEL_EXECUTE_COMPLETE'}
   self._callbacks = {}
   self._handlers  = {}
+
+  if self._inbound then
+    if options and options.subscribe then
+      self._auto_subscribe = build_events(options.subscribe)
+    end
+
+    if self._auto_subscribe ~= 'ALL' then
+      local events = table.concat(required_events, ' ')
+      if self._auto_subscribe then
+        events = events .. ' ' .. self._auto_subscribe
+      end
+      self._auto_subscribe = events
+    end
+
+    if options and options.filter then
+      self._auto_filter = build_filter(options.filter)
+    end
+  end
 
   self._open_q    = ut.Queue.new()
   self._close_q   = ut.Queue.new()
@@ -578,6 +658,20 @@ function ESLConnection:_on_event(event, headers)
   end
 end
 
+-- allows execute commands before `ready` state
+-- @note you can execute only one command at the time.
+-- You have to wait until command done and only then
+-- send new one
+local function directSendRecv(self, cmd, args, cb)
+  if is_callable(args) then
+    cb, args = args
+  end
+
+  cmd = encode_cmd(cmd, args)
+  self:_write(cmd)
+  return self._queue:push_front(cb or dummy)
+end
+
 local function on_ready(self, ...)
   self._authed = true
 
@@ -590,6 +684,46 @@ local function on_ready(self, ...)
   end
 
   call_q(self._open_q, self, nil, ...)
+end
+
+-- called after init connection done
+local function on_auth(self, reply, headers)
+  -- here we can not use we regular functions because we not ready yeat
+  -- so we have to use low level api.
+  -- Because of that i use it only for `Inbound` connection.
+  -- For `Outbound` connection we can do all this via regular functions
+  -- After `Accept` but before pass object to client. So client could not
+  -- execute any code before init part.
+  -- Also for Outbound socket is more likely just need only `myevents` command.
+
+  if self._auto_subscribe then
+    return directSendRecv(self, 'event plain ' .. self._auto_subscribe, function(self, err, res)
+      if err then
+        self:emit('esl::error::io', err)
+        return self:_close(err)
+      end
+      if self._auto_filter then
+        local function filter(i)
+          local f = self._auto_filter[i]
+          if not f then
+            return on_ready(self, reply, headers)
+          end
+          directSendRecv(self, 'filter ' .. f[1] .. ' ' .. f[2], function(self, err, res)
+            if err then
+              self:emit('esl::error::io', err)
+              return self:_close(err)
+            end
+            self._filtered = true
+            return filter(i + 1)
+          end)
+        end
+        return filter(1)
+      end
+      return on_ready(self, reply, headers)
+    end)
+  end
+
+  return on_ready(self, reply, headers)
 end
 
 function ESLConnection:open(cb)
@@ -619,6 +753,13 @@ function ESLConnection:open(cb)
     -- so we do not need reset this flag again
     if self._opening then return end
     self._opening = true
+  end
+
+  if self._inbound then
+    -- We apply fileter before `ready`. Also we can call `bgapi` just after `open`
+    -- E.g.`cnn:open(); cnn:bgapi('status');`
+    -- So we have to set this flag here (before first call of bgapi)
+    self._filtered = self._auto_filter and #self._auto_filter > 0
   end
 
   local function on_connect(cli, err)
@@ -679,19 +820,7 @@ function ESLConnection:open(cb)
       end
 
       self:emit('esl::auth')
-
-      -- subscribe
-      -- we can not use regular function because we not ready yeat
-      -- so do command encode here
-      local cmd = encode_cmd('event plain ' .. table.concat(self._events, ' '))
-      self:_write(cmd)
-      self._queue:push_front(function(self, err, res)
-        if err then
-          self:emit('esl::error::io', err)
-          return self:_close(err)
-        end
-        return on_ready(self, reply, headers)
-      end)
+      return on_auth(self, reply, headers)
     end)
   end
 
@@ -951,18 +1080,7 @@ end
 local function filter_impl(self, fn, header, value, cb)
   if type(header) == 'table' then
     cb = cb or value or dummy
-
-    local t = {}
-    for k, v in pairs(header) do
-      if type(k) == 'number' then k = 'Event-Name' end
-      if type(v) == 'table' then
-        for i = 1, #v do
-          t[#t + 1] = {k, v[i]}
-        end
-      else
-        t[#t + 1] = {k, v}
-      end
-    end
+    local t = build_filter(header)
 
     local n, first_err = #t
     for i = 1, #t do
@@ -1005,42 +1123,6 @@ function ESLConnection:myevents(cb)
   return self:sendRecv('myevents', cb)
 end
 
-local function build_events(events)
-  if type(events) == 'table' then
-    if is_in('ALL', events) then
-      events = 'ALL'
-    else
-      local regular, custom = {}, {}
-      for _, event in ipairs(events) do
-        -- handle 'CUSTOM SMS::MESSAGE' and 'CUSTOM::SMS::MESSAGE'
-        local base, sub = ut.split_first(event, '%s+')
-        if not sub then base, sub = ut.split_first(event, '::', true) end
-
-        if not is_in(base, required_events) then
-          if base == 'CUSTOM' then
-            append_uniq(custom, base)
-            if sub then append_uniq(custom, sub) end
-          else
-            append_uniq(regular, event)
-          end
-        end
-      end
-    end
-
-    events = nil
-    if #regular > 0 then
-      events = table.concat(regular, ' ')
-    end
-
-    if #custom > 0 then
-      events = events and (events .. ' ') or ''
-      events = events .. table.concat(custom, ' ')
-    end
-  end
-
-  return events or 'ALL'
-end
-
 function ESLConnection:events(etype, events, cb)
   if type(events) == 'function' then
     cb, events = events
@@ -1048,15 +1130,17 @@ function ESLConnection:events(etype, events, cb)
 
   events = build_events(events)
 
-  if events ~= 'ALL' then
-    events = table.concat(self._events, ' ') .. ' ' .. events
+  if events ~= 'ALL' and not self._inbound then
+    -- for `Inbound` connection we already subscribe to all `required_events`
+    -- events when we did connection
+    events = table.concat(required_events, ' ') .. ' ' .. events
   end
 
   return self:sendRecv('event ' .. etype .. ' ' .. events, cb)
 end
 
 -- this command unsubscribe from all events and also
--- flush all pending events. So use is very carefully.
+-- flush all pending events. So use it very carefully.
 function ESLConnection:noevents(cb)
   return self:sendRecv('noevents', cb)
 end
