@@ -383,53 +383,71 @@ local function on_write_done(cli, err, self)
   end
 end
 
-local required_events = {'BACKGROUND_JOB', 'CHANNEL_EXECUTE_COMPLETE'}
+local required_events = {'BACKGROUND_JOB', 'CHANNEL_EXECUTE_COMPLETE', 'CHANNEL_HANGUP_COMPLETE'}
 
 local register_execute_complite_handler, remove_execute_complite_handler, remove_all_execute_complite_handler do
 
-local EVENT_NAME = "esl::event::CHANNEL_EXECUTE_COMPLETE::"
+local EXECUTE_EVENT_NAME = "esl::event::CHANNEL_EXECUTE_COMPLETE::"
+local HANGUP_EVENT_NAME  = "esl::event::CHANNEL_HANGUP_COMPLETE::"
 
 local function execute_complite_handler(self, eventName, event)
+  local channel_uuid = string.sub(eventName, #EXECUTE_EVENT_NAME + 1)
+  local callbacks = self._callbacks[channel_uuid]
+  if not callbacks then return end
+
   local command_uuid = event:getHeader('Application-UUID')
-  local cb = command_uuid and self._callbacks[command_uuid]
-  if cb then
-    local channel_uuid = string.sub(eventName, #EVENT_NAME + 1)
-    remove_execute_complite_handler(self, channel_uuid, command_uuid)
-    cb(self, nil, event)
+  local cb = command_uuid and callbacks[command_uuid]
+  if not cb then return end
+
+  remove_execute_complite_handler(self, channel_uuid, command_uuid)
+  return cb(self, nil, event)
+end
+
+local function hangup_complite_handler(self, eventName, event)
+  local channel_uuid = string.sub(eventName, #HANGUP_EVENT_NAME + 1)
+  local callbacks = self._callbacks[channel_uuid]
+  if not callbacks then return end
+
+  local err = ESLError(ESLError.EHANGUP, 'channel hangup')
+  for command_uuid, cb in pairs(callbacks) do
+    callbacks[command_uuid] = nil
+    cb(self, err, event)
   end
 end
 
 register_execute_complite_handler = function(self, channel_uuid, command_uuid, cb)
-  self._callbacks[command_uuid] = cb
-  if not self._handlers[channel_uuid] then
-    self._handlers[channel_uuid] = 1
-    self:on(EVENT_NAME .. channel_uuid, execute_complite_handler)
-  else
-    self._handlers[channel_uuid] = self._handlers[channel_uuid] + 1
+  local callbacks = self._callbacks[channel_uuid]
+  if not callbacks then
+    callbacks = {}
+    self._callbacks[channel_uuid] = callbacks
+    self:on(EXECUTE_EVENT_NAME .. channel_uuid, execute_complite_handler)
+    self:on(HANGUP_EVENT_NAME .. channel_uuid, hangup_complite_handler)
   end
+
+  callbacks[command_uuid] = cb or dummy
 end
 
 remove_execute_complite_handler = function(self, channel_uuid, command_uuid)
-  if not self._handlers[channel_uuid] then
-    assert(not self._callbacks[command_uuid])
+  local callbacks = self._callbacks[channel_uuid]
+  if not callbacks then
     return
   end
 
-  assert(self._handlers[channel_uuid] > 0)
-  assert(self._callbacks[command_uuid])
+  local cb = assert(callbacks[command_uuid])
+  callbacks[command_uuid] = nil
 
-  self._callbacks[command_uuid] = nil
-  self._handlers[channel_uuid] = self._handlers[channel_uuid] - 1
-  if self._handlers[channel_uuid] == 0 then
-    self._handlers[channel_uuid] = nil
-    self:off(EVENT_NAME .. channel_uuid, execute_complite_handler)
+  if not next(callbacks) then
+    self._callbacks[channel_uuid] = nil
+    self:off(EXECUTE_EVENT_NAME .. channel_uuid, execute_complite_handler)
+    self:off(HANGUP_EVENT_NAME .. channel_uuid, execute_complite_handler)
   end
 end
 
 remove_all_execute_complite_handler = function(self)
-  for channel_uuid in pairs(self._handlers) do
-    self._handlers[channel_uuid] = nil
-    self:off(EVENT_NAME .. channel_uuid, execute_complite_handler)
+  for channel_uuid in pairs(self._callbacks) do
+    self._callbacks[channel_uuid] = nil
+    self:off(EXECUTE_EVENT_NAME .. channel_uuid, execute_complite_handler)
+    self:off(HANGUP_EVENT_NAME .. channel_uuid, execute_complite_handler)
   end
 end
 
@@ -575,12 +593,14 @@ function ESLConnection:_close(err, cb)
       end
     end
 
-    remove_all_execute_complite_handler(self)
-
-    for uuid, cb in pairs(self._callbacks) do
-      self._callbacks[uuid] = nil
-      cb(self, err)
+    for _, callbacks in pairs(self._callbacks) do
+      for uuid, cb in pairs(callbacks) do
+        callbacks[uuid] = nil
+        cb(self, err)
+      end
     end
+
+    remove_all_execute_complite_handler(self)
 
     call_q(self._close_q, self, err)
 
@@ -589,7 +609,6 @@ function ESLConnection:_close(err, cb)
 
     self:emit('esl::close', err)
   end)
-
 end
 
 function ESLConnection:close(cb)
@@ -1038,10 +1057,15 @@ function ESLConnection:_execute(async, lock, cmd, app, args, uuid, cb)
   -- To identify such events with specific command we send 
   -- `Event-UUID` header and FS add its value as `Application-UUID`
   -- Not sure where is documented.
+  -- Also if channel hangup before starting execute app there
+  -- will no CHANNEL_EXECUTE_COMPLETE event so we have to handle
+  -- `CHANNEL_HANGUP` or `CHANNEL_HANGUP_COMPLITE` events
 
   local channel_uuid = uuid or self:getInfo():getHeader('Unique-ID')
   local command_uuid = ESLUtils.uuid()
   event['Event-UUID'] = command_uuid
+
+  --! @todo make this bihavior optional. Allow just handle `reply`
   register_execute_complite_handler(self, channel_uuid, command_uuid, cb or dummy)
 
   self:sendRecv(uuid and ('sendmsg ' .. uuid) or 'sendmsg', event, function(self, err, reply)
@@ -1050,6 +1074,8 @@ function ESLConnection:_execute(async, lock, cmd, app, args, uuid, cb)
       return cb(self, err, reply)
     end
   end)
+
+  return command_uuid
 end
 
 function ESLConnection:setAsyncExecute(value)

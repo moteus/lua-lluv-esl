@@ -37,11 +37,12 @@ end
 end
 
 local errors = {} for k, v in pairs{
-  EPROTO = -1;
-  ERESET = -2;
-  EAUTH  = -3;
-  EINTR  = -4;
-  EARGS  = -5;
+  EPROTO  = -1;
+  ERESET  = -2;
+  EAUTH   = -3;
+  EINTR   = -4;
+  EARGS   = -5;
+  EHANGUP = -6;
 }do errors[k], errors[v] = v, k end
 
 return setmetatable(errors,{__call = function(t, no, ...)
