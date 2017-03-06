@@ -1186,7 +1186,7 @@ function ESLConnection:subscribe(events, cb)
 end
 
 function ESLConnection:divertEvents(on, cb)
-  return self:sendRecv('divert_events ' .. on and 'on' or 'off', cb)
+  return self:sendRecv('divert_events ' .. (on and 'on' or 'off'), cb)
 end
 
 end
