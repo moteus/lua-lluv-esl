@@ -22,7 +22,6 @@ dependencies = {
   "lua-cjson",
   "luaexpat",
   "luuid",
-  
 }
 
 build = {
@@ -31,8 +30,10 @@ build = {
   type = "builtin",
 
   modules = {
-    ["lluv.esl"           ] = "src/lluv/esl.lua",
-    ["lluv.esl.error"     ] = "src/lluv/esl/error.lua",
-    ["lluv.esl.utils"     ] = "src/lluv/esl/utils.lua",
+    ["lluv.esl"            ] = "src/lluv/esl.lua",
+    ["lluv.esl.error"      ] = "src/lluv/esl/error.lua",
+    ["lluv.esl.utils"      ] = "src/lluv/esl/utils.lua",
+    ["lluv.esl.server"     ] = "src/lluv/esl/server.lua",
+    ["lluv.esl.connection" ] = "src/lluv/esl/connection.lua",
   }
 }
