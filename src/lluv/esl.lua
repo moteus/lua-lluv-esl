@@ -383,8 +383,6 @@ local function on_write_done(cli, err, self)
   end
 end
 
-local required_events = {'BACKGROUND_JOB', 'CHANNEL_EXECUTE_COMPLETE', 'CHANNEL_HANGUP_COMPLETE'}
-
 local register_execute_complite_handler, remove_execute_complite_handler, remove_all_execute_complite_handler do
 
 local EXECUTE_EVENT_NAME = "esl::event::CHANNEL_EXECUTE_COMPLETE::"
@@ -464,13 +462,11 @@ local function build_events(events)
         local base, sub = ut.split_first(event, '%s+')
         if not sub then base, sub = ut.split_first(event, '::', true) end
 
-        if not is_in(base, required_events) then
-          if base == 'CUSTOM' then
-            append_uniq(custom, base)
-            if sub then append_uniq(custom, sub) end
-          else
-            append_uniq(regular, event)
-          end
+        if base == 'CUSTOM' then
+          append_uniq(custom, base)
+          if sub then append_uniq(custom, sub) end
+        else
+          append_uniq(regular, event)
         end
       end
 
@@ -536,6 +532,17 @@ function ESLConnection:__init(host, port, password)
   self._lock      = nil
   self._callbacks = {}
   self._handlers  = {}
+  self._execute_wait_response = not (options and options.no_execute_result)
+  self._events    = {}
+
+  if not options.no_bgapi then
+    append_uniq(self._events, 'BACKGROUND_JOB')
+  end
+
+  if self._execute_wait_response then
+    append_uniq(self._events, 'CHANNEL_EXECUTE_COMPLETE')
+    append_uniq(self._events, 'CHANNEL_HANGUP_COMPLETE')
+  end
 
   if self._inbound then
     if options and options.subscribe then
@@ -543,11 +550,9 @@ function ESLConnection:__init(host, port, password)
     end
 
     if self._auto_subscribe ~= 'ALL' then
-      local events = table.concat(required_events, ' ')
-      if self._auto_subscribe then
-        events = events .. ' ' .. self._auto_subscribe
+      if self._auto_subscribe and #self._events > 0 then
+        self._auto_subscribe = table.concat(self._events, ' ') .. ' ' .. self._auto_subscribe
       end
-      self._auto_subscribe = events
     end
 
     if options and options.filter then
@@ -627,7 +632,6 @@ local IS_EVENT = {
 }
 
 function ESLConnection:_on_event(event, headers)
-
   self:emit('esl::recv', event, headers)
 
   local ct = headers['Content-Type']
@@ -1065,12 +1069,18 @@ function ESLConnection:_execute(async, lock, cmd, app, args, uuid, cb)
   local command_uuid = ESLUtils.uuid()
   event['Event-UUID'] = command_uuid
 
-  --! @todo make this bihavior optional. Allow just handle `reply`
-  register_execute_complite_handler(self, channel_uuid, command_uuid, cb or dummy)
+  if self._execute_wait_response then
+    register_execute_complite_handler(self, channel_uuid, command_uuid, cb or dummy)
+  end
 
   self:sendRecv(uuid and ('sendmsg ' .. uuid) or 'sendmsg', event, function(self, err, reply)
     if err or not reply:getReplyOk() then
-      remove_execute_complite_handler(self, channel_uuid, command_uuid)
+      if self._execute_wait_response then
+        remove_execute_complite_handler(self, channel_uuid, command_uuid)
+      end
+      return cb(self, err, reply)
+    end
+    if not self._execute_wait_response then
       return cb(self, err, reply)
     end
   end)
@@ -1157,9 +1167,9 @@ function ESLConnection:events(etype, events, cb)
   events = build_events(events)
 
   if events ~= 'ALL' and not self._inbound then
-    -- for `Inbound` connection we already subscribe to all `required_events`
+    -- for `Inbound` connection we already subscribe to all `self._events`
     -- events when we did connection
-    events = table.concat(required_events, ' ') .. ' ' .. events
+    events = table.concat(self._events, ' ') .. ' ' .. events
   end
 
   return self:sendRecv('event ' .. etype .. ' ' .. events, cb)

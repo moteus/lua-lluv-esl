@@ -106,6 +106,9 @@ local function sip_message(cnn, options, cb)
 end
 
 local cnn = esl.Connection{
+  -- we do not this so we can reduce recources
+  no_execute_result = true; no_bgapi = true;
+
   -- subscribe to result messages
   subscribe = {'CUSTOM SMS::SEND_MESSAGE'};
   -- ignore not result messages
