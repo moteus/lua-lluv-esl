@@ -1,5 +1,5 @@
 local uv         = require "lluv"
-local Connection = require "lluv.esl.connection"
+local Connection = require "lluv.esl.connection".Connection
 
 local DummyLogger = {} do
   local lvl = {'emerg','alert','fatal','error','warning','notice','info','debug','trace'}
