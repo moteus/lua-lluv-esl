@@ -96,9 +96,9 @@ function ESLEvent:encode(fmt, raw)
     data[#data + 1] = '  </headers>' .. EOL
 
     if self._body then
-      data[#data + 1] = '  <body>' .. EOL
-      data[#data + 1] = self._body
-      data[#data + 1] = '  </headers>' .. EOL
+      data[#data + 1] = '  <body>'
+      data[#data + 1] = self._body --! @fixme do xml encode value
+      data[#data + 1] = '  </body>' .. EOL
     end
 
     data[#data + 1] = '</event>'
@@ -346,6 +346,36 @@ end
 
 end
 
+local function AutoReconnect(cnn, interval, on_connect, on_disconnect)
+  local timer = uv.timer():start(0, interval, function(self)
+    self:stop()
+    cnn:open()
+  end):stop()
+
+  local connected = true
+
+  cnn:on('esl::close', function(self, event, ...)
+    local flag = connected
+
+    connected = false
+
+    if flag then on_disconnect(self, ...) end
+
+    if timer:closed() or timer:closing() then
+      return
+    end
+
+    timer:again()
+  end)
+
+  cnn:on('esl::ready', function(self, event, ...)
+    connected = true
+    on_connect(self, ...)
+  end)
+
+  return timer
+end
+
 local ESLConnection = ut.class(EventEmitter) do
 
 local function encode_cmd(cmd, args)
@@ -535,7 +565,7 @@ function ESLConnection:__init(host, port, password)
   self._execute_wait_response = not (options and options.no_execute_result)
   self._events    = {}
 
-  if not options.no_bgapi then
+  if options and not options.no_bgapi then
     append_uniq(self._events, 'BACKGROUND_JOB')
   end
 
@@ -558,6 +588,14 @@ function ESLConnection:__init(host, port, password)
     if options and options.filter then
       self._auto_filter = build_filter(options.filter)
     end
+  end
+
+  if self._inbound and options and options.reconnect then
+    local interval = 30
+    if type(options.reconnect) == 'number' then
+      interval = options.reconnect * 1000
+    end
+    self._reconnect_interval = interval
   end
 
   self._open_q    = ut.Queue.new()
@@ -617,6 +655,10 @@ function ESLConnection:_close(err, cb)
 end
 
 function ESLConnection:close(cb)
+  if self._reconnect then
+    self._reconnect:close()
+    self._reconnect = nil
+  end
   self:_close(nil, cb)
 end
 
@@ -857,6 +899,14 @@ function ESLConnection:open(cb)
   local ok, err = self._cli:connect(self._host, self._port, on_connect)
   if not ok then
     return uv.defer(on_connect, self._cli, err)
+  end
+
+  if self._reconnect_interval and not self._reconnect then
+    self._reconnect = AutoReconnect(self, self._reconnect_interval, function(self)
+      self:emit('esl::reconnect')
+    end, function(self, ...)
+      self:emit('esl::disconnect', ...)
+    end)
   end
 
   return self

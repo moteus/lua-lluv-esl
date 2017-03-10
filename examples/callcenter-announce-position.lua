@@ -4,13 +4,11 @@
 
 package.path = "..\\src\\?.lua;" .. package.path
 
-local reconnect_interval = 10000
-
 local uv  = require "lluv"
 local ut  = require "lluv.utils"
 local esl = require "lluv.esl"
 
-local cnn = esl.Connection('127.0.0.1', 8022, 'ftjD28edM444')
+local cnn = esl.Connection{'127.0.0.1', 8021, 'ClueCon', reconnect = 10}
 
 local function notify_q(q)
   cnn:api("callcenter_config queue list members " .. q, function(self, err, reply)
@@ -44,44 +42,14 @@ local function notify_all_q()
   end)
 end
 
-local function esl_reconnect(cnn, interval, on_connect, on_disconnect)
-  local timer = uv.timer():start(0, interval, function(self)
-    self:stop()
-    cnn:open()
-  end):stop()
-
-  local connected = true
-
-  cnn:on('esl::close', function(self, event, ...)
-    local flag = connected
-
-    connected = false
-
-    if flag then on_disconnect(self, ...) end
-
-    if timer:closed() or timer:closing() then
-      return
-    end
-
-    timer:again()
-  end)
-
-  cnn:on('esl::ready', function(self, event, ...)
-    connected = true
-    on_connect(self, ...)
-  end)
-
-  if cnn:closed() then
-    cnn:open()
-  end
-
-  return timer
-end
-
-esl_reconnect(cnn, reconnect_interval, function(self)
+cnn:on('esl::reconnect', function()
   print("Connection done")
-end, function(self, err)
+end)
+
+cnn:on('esl::disconnect', function(self, _, err)
   print(string.format('Disconnected  - %s', err and tostring(err) or 'NO ERROR'))
 end)
+
+cnn:open()
 
 uv.run()
