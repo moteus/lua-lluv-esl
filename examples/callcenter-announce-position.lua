@@ -8,7 +8,9 @@ local uv  = require "lluv"
 local ut  = require "lluv.utils"
 local esl = require "lluv.esl"
 
-local cnn = esl.Connection{'127.0.0.1', 8021, 'ClueCon', reconnect = 10}
+local cnn = esl.Connection{'127.0.0.1', 8021, 'ClueCon',
+  reconnect = 10, no_execute_result = true, no_bgapi = true;
+}
 
 local function notify_q(q)
   cnn:api("callcenter_config queue list members " .. q, function(self, err, reply)
