@@ -791,6 +791,10 @@ local function on_auth(self, reply, headers)
   return on_ready(self, reply, headers)
 end
 
+local on_esl_reconnect  = function(self, ...) self:emit('esl::reconnect',  ...) end
+
+local on_esl_disconnect = function(self, ...) self:emit('esl::disconnect', ...) end
+
 function ESLConnection:open(cb)
   if self._authed then
     -- we already connected
@@ -902,11 +906,11 @@ function ESLConnection:open(cb)
   end
 
   if self._reconnect_interval and not self._reconnect then
-    self._reconnect = AutoReconnect(self, self._reconnect_interval, function(self)
-      self:emit('esl::reconnect')
-    end, function(self, ...)
-      self:emit('esl::disconnect', ...)
-    end)
+    self._reconnect = AutoReconnect(self,
+      self._reconnect_interval,
+      on_esl_reconnect,
+      on_esl_disconnect
+    )
   end
 
   return self
@@ -1238,37 +1242,6 @@ end
 function ESLConnection:divertEvents(on, cb)
   return self:sendRecv('divert_events ' .. (on and 'on' or 'off'), cb)
 end
-
-end
-
-if false then
-
-local stp   = require"StackTracePlus"
-
-local cnn = ESLConnection.new()
-
-local pp = require "pp"
-
-cnn:on('esl::send', function(_, event, data)
-  print("SEND -------------------------------")
-  pp(data)
-  print("------------------------------------")
-end)
-
-cnn:on('esl::recv', function(_, event, data, h)
-  print("RECV -------------------------------")
-  pp(data)
-  pp(h)
-  print("------------------------------------")
-end)
-
-cnn:open(print)
-
-cnn:nolog(function(self, err, response, headers)
-  pp("NOLOG", response, headers)
-end)
-
-uv.run(stp.stacktrace)
 
 end
 
