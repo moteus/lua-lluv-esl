@@ -4,30 +4,6 @@ local esl          = require "lluv.esl"
 local ESLUtils     = require "lluv.esl.utils"
 local EventEmitter = require "EventEmitter".EventEmitter
 
-local cnn = esl.Connection('127.0.0.1', 8021, 'ClueCon')
-
-local dial_string = {
-  options = {
-    ignore_early_media           = true;
-    origination_caller_id_name   = 'lluv-esl';
-    origination_caller_id_number = '100';
-  };
-
-  strings = { -- Enterprise dial string
-    {  -- Group call 1
-      options = {};
-      sequence = true;
-      {'user/101@pbx.office.local'};
-    };
-
-    { -- Group call 2
-      options = {};
-      sequence = true;
-      {originate_delay_start = 5000; 'user/102@pbx.office.local'};
-    };
-  }
-};
-
 local Originate = ut.class(EventEmitter) do
 
 function Originate:__init(cnn)
@@ -100,7 +76,7 @@ function Originate:dial(dial_string, app)
     this:emit('dtmf', event)
   end
 
-  local events = {"CHANNEL_CREATE", "CHANNEL_DESTROY", "CHANNEL_ANSWER", "CHANNEL_EXECUTE", "DTMF"}
+  local events = {"CHANNEL_CREATE", "CHANNEL_DESTROY", "CHANNEL_ANSWER", "CHANNEL_EXECUTE", "DTMF", "CHANNEL_EXECUTE_COMPLETE"}
 
   cleanup = function()
     -- !todo unsubscribe from `events`
@@ -118,8 +94,6 @@ function Originate:dial(dial_string, app)
   cnn:filter(session_filter);
   cnn:subscribe(events)
 
-  -- cnn:on('esl::event::**',            on_channel_create           )
-
   cnn:on('esl::event::CHANNEL_CREATE::*',            on_channel_create           )
   cnn:on('esl::event::CHANNEL_DESTROY::*',           on_channel_destroy          )
   cnn:on('esl::event::CHANNEL_ANSWER::*',            on_channel_answer           )
@@ -133,57 +107,86 @@ function Originate:dial(dial_string, app)
     if state == 'originate' then state = 'ringing' end
     if not next(channels) then
       cleanup()
-      this:emit('end', event)
+      this:emit('end', event, err)
     end
   end)
 end
 
 end
 
+local cnn = esl.Connection('127.0.0.1', 8021, 'ClueCon')
+
 cnn:open(function(self, err)
   if err then
     print("Error:", err)
     return self:close()
   end
-
-  print("Dial String:", ESLUtils.dial_string.create(dial_string):build())
-
-  local originate = Originate.new(self)
-
-  -- originate:onAny(function(self, eventName, event) print(eventName) end)
-
-  originate:on('create', function(self, eventName, event)
-    print('New channel:', event:getHeader('Channel-Name'))
-  end)
-
-  originate:on('destroy', function(self, eventName, event)
-    print('Close channel:', event:getHeader('Channel-Name'), event:getHeader('Hangup-Cause'))
-  end)
-
-  originate:on('answer', function(self, eventName, event)
-    print('Answer:', event:getHeader('Channel-Name'))
-  end)
-
-  originate:on('dtmf', function(self, eventName, event)
-    local digit    = ev:getHeader("DTMF-Digit");
-    local duration = ev:getHeader("DTMF-Duration");
-    print('Dtmf:', event:getHeader('Channel-Name'), digit, duration)
-  end)
-
-  originate:on('execute', function(self, eventName, event)
-    print('Execute', event:getHeader('Channel-Name'), event:getHeader('Application'))
-  end)
-
-  originate:on('execute_complete', function(self, eventName, event)
-    print('Complete', event:getHeader('Channel-Name'), event:getHeader('Application'), event:getHeader('Application-Response'))
-  end)
-
-  originate:on('end', function(self, eventName, event)
-    print('Hangup:', event:getHeader('Channel-Name') or event:getBody(), event:getHeader('Hangup-Cause'))
-    cnn:close()
-  end)
-
-  originate:dial(dial_string, '&echo()')
 end)
+
+local dial_string = {
+  options = {
+    ignore_early_media           = true;
+    origination_caller_id_name   = 'lluv-esl';
+    origination_caller_id_number = '100';
+  };
+
+  strings = { -- Enterprise dial string
+    {  -- Group call 1
+      options = {};
+      sequence = true;
+      {'user/101@pbx.office.local'};
+    };
+
+    { -- Group call 2
+      options = {};
+      sequence = true;
+      {originate_delay_start = 5000; 'user/102@pbx.office.local'};
+    };
+  }
+};
+
+print("Dial String:", ESLUtils.dial_string.create(dial_string):build())
+
+local originate = Originate.new(cnn)
+
+-- originate:onAny(function(self, eventName, event) print(eventName) end)
+
+originate:on('create', function(self, eventName, event)
+  print('New channel:', event:getHeader('Channel-Name'))
+end)
+
+originate:on('destroy', function(self, eventName, event)
+  print('Close channel:', event:getHeader('Channel-Name'), event:getHeader('Hangup-Cause'))
+end)
+
+originate:on('answer', function(self, eventName, event)
+  print('Answer:', event:getHeader('Channel-Name'))
+end)
+
+originate:on('dtmf', function(self, eventName, event)
+  local digit    = ev:getHeader("DTMF-Digit");
+  local duration = ev:getHeader("DTMF-Duration");
+  print('Dtmf:', event:getHeader('Channel-Name'), digit, duration)
+end)
+
+originate:on('execute', function(self, eventName, event)
+  print('Execute', event:getHeader('Channel-Name'), event:getHeader('Application'))
+end)
+
+originate:on('execute_complete', function(self, eventName, event)
+  print('Complete', event:getHeader('Channel-Name'), event:getHeader('Application'), event:getHeader('Application-Response'))
+end)
+
+originate:on('end', function(self, eventName, event, err)
+  if event then
+    print('Hangup:', event:getHeader('Channel-Name') or event:getBody(), event:getHeader('Hangup-Cause'))
+  else
+    print('Hangup:', err)
+  end
+
+  cnn:close()
+end)
+
+originate:dial(dial_string, '&echo()')
 
 uv.run()
