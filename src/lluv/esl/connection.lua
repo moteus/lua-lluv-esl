@@ -16,6 +16,7 @@ local dummy, call_q, is_callable = ESLUtils.dummy, ESLUtils.call_q, ESLUtils.is_
 local super = ESLUtils.super
 local append_uniq, is_in = ESLUtils.append_uniq, ESLUtils.is_in
 
+-------------------------------------------------------------------------------
 local CmdQueue = ut.class() do
 
 function CmdQueue:__init()
@@ -38,7 +39,9 @@ function CmdQueue:size()  return self._q:size()                    end
 function CmdQueue:empty() return self._q:empty()                   end
 
 end 
+-------------------------------------------------------------------------------
 
+-------------------------------------------------------------------------------
 local ESLEvent = ut.class() do
 
 function ESLEvent:__init(headers, body)
@@ -194,11 +197,15 @@ function ESLEvent:getReplyErr(txt)
 end
 
 end
+-------------------------------------------------------------------------------
 
+-------------------------------------------------------------------------------
 local ESLParser = ut.class() do
 
-function ESLParser:__init()
+function ESLParser:__init(options)
   self._buf = ut.Buffer.new(EOL)
+  self._max_buffer_size = options and options.max_buffer_size
+  self._self            = options and options.self or self
   self:_reset_context()
   return self
 end
@@ -213,6 +220,9 @@ end
 
 function ESLParser:append(data)
   self._buf:append(data)
+  if self._max_buffer_size and self._on_overflow and self._buf:size() > self._max_buffer_size then
+    self._on_overflow(self._self, self._buf:size())
+  end
   return self
 end
 
@@ -344,8 +354,14 @@ function ESLParser:reset()
   return self
 end
 
+function ESLParser:on_overflow(handler)
+  self._on_overflow = handler
 end
 
+end
+-------------------------------------------------------------------------------
+
+-------------------------------------------------------------------------------
 local function AutoReconnect(cnn, interval, on_connect, on_disconnect)
   local timer = uv.timer():start(0, interval, function(self)
     self:stop()
@@ -375,7 +391,9 @@ local function AutoReconnect(cnn, interval, on_connect, on_disconnect)
 
   return timer
 end
+-------------------------------------------------------------------------------
 
+-------------------------------------------------------------------------------
 local ESLConnection = ut.class(EventEmitter) do
 
 local function encode_cmd(cmd, args)
@@ -530,6 +548,10 @@ local function build_filter(header)
   return t
 end
 
+local function on_buffer_overflow(self, size)
+  self:emit('esl::overflow::buffer', size)
+end
+
 function ESLConnection:__init(host, port, password)
   self = super(self, '__init', {wildcard = true, delimiter = '::'})
 
@@ -554,7 +576,9 @@ function ESLConnection:__init(host, port, password)
   self._host      = host or '127.0.0.1'
   self._port      = port or 8021
   self._pass      = password or 'ClueCon'
-  self._parser    = ESLParser.new()
+  self._parser    = ESLParser.new{self = self,
+    max_buffer_size = options and options.alarm_buffer_size
+  }
   self._bgjobs    = nil
   self._authed    = false
   self._filtered  = nil
@@ -565,7 +589,9 @@ function ESLConnection:__init(host, port, password)
   self._execute_wait_response = not (options and options.no_execute_result)
   self._events    = {}
 
-  if options and not options.no_bgapi then
+  self._parser:on_overflow(on_buffer_overflow)
+
+  if not (options and options.no_bgapi) then
     append_uniq(self._events, 'BACKGROUND_JOB')
   end
 
@@ -582,6 +608,8 @@ function ESLConnection:__init(host, port, password)
     if self._auto_subscribe ~= 'ALL' then
       if self._auto_subscribe and #self._events > 0 then
         self._auto_subscribe = table.concat(self._events, ' ') .. ' ' .. self._auto_subscribe
+      else
+        self._auto_subscribe = table.concat(self._events, ' ')
       end
     end
 
@@ -1244,6 +1272,7 @@ function ESLConnection:divertEvents(on, cb)
 end
 
 end
+-------------------------------------------------------------------------------
 
 return {
   Event      = ESLEvent.new;
