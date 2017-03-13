@@ -215,7 +215,7 @@ local function CreateDialString(t)
   local dialString = DialString.new()
   if t.SEP then dialString:set_separator(t.SEP)
   elseif t.sequence ~= nil then
-    dialString:set_separator(t.sequence and ',' or '|')
+    dialString:set_separator(t.sequence and '|' or ',')
   end
   local i = 1
   while(t[i])do
