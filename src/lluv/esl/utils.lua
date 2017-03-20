@@ -14,6 +14,14 @@ end
 -------------------------------------------------------------------------------
 utils.dial_string = {} do
 
+local function qute_value(v)
+  v = tostring(v)
+  if string.find(v, ' ') then
+    v = "'" .. v .. "'"
+  end
+  return v
+end
+
 local BaseLeg = ut.class() do
 
 function BaseLeg:__init()
@@ -56,7 +64,7 @@ function BaseLeg:build(mask)
   local options = ''
   for k,v in pairs(t) do if type(k) == 'string' then
     if options ~= '' then options = options .. ',' end
-    options = options .. k .. '=' .. tostring(v)
+    options = options .. k .. '=' .. qute_value(v)
   end end
   if options == '' then return '' end
   return (string.format(mask, options))
