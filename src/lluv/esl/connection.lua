@@ -605,11 +605,12 @@ function ESLConnection:__init(host, port, password)
       self._auto_subscribe = build_events(options.subscribe)
     end
 
-    if self._auto_subscribe ~= 'ALL' then
-      if self._auto_subscribe and #self._events > 0 then
-        self._auto_subscribe = table.concat(self._events, ' ') .. ' ' .. self._auto_subscribe
+    if (#self._events > 0) and (self._auto_subscribe ~= 'ALL') then
+      local events = table.concat(self._events, ' ')
+      if self._auto_subscribe then
+        self._auto_subscribe = events .. ' ' .. self._auto_subscribe
       else
-        self._auto_subscribe = table.concat(self._events, ' ')
+        self._auto_subscribe = events
       end
     end
 
