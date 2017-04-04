@@ -1,5 +1,5 @@
 # lua-lluv-esl
-------------------------------------------------------------------------------
+
 [![License](http://img.shields.io/badge/License-MIT-brightgreen.svg)](LICENSE)
 
 ## FreeSWITCH ESL implementation for lluv library
