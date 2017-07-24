@@ -746,6 +746,12 @@ function ESLConnection:_on_event(event, headers)
   end
 
   if self._authed == nil then -- this is first event
+    if ct == "text/rude-rejection" then -- acl fail
+      err = ESLError(ESLError.EAUTH, event:getBody() or 'Rejected by acl')
+      self:emit('esl::error::auth', err)
+      return self:_close(err)
+    end
+
     assert(ct == 'auth/request')
     self._authed = false
     return self:_write(encode_cmd("auth " .. self._pass))
