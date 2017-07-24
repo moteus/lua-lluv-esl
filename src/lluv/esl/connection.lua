@@ -747,7 +747,9 @@ function ESLConnection:_on_event(event, headers)
 
   if self._authed == nil then -- this is first event
     if ct == "text/rude-rejection" then -- acl fail
-      err = ESLError(ESLError.EAUTH, event:getBody() or 'Rejected by acl')
+      local msg = event:getBody()
+      if msg then msg = string.match(msg, "^%s*(.-)%s*$") end
+      err = ESLError(ESLError.EAUTH, msg or 'Rejected by acl')
       self:emit('esl::error::auth', err)
       return self:_close(err)
     end
@@ -799,7 +801,9 @@ local function on_auth(self, reply, headers)
   if self._auto_subscribe then
     return directSendRecv(self, 'event plain ' .. self._auto_subscribe, function(self, err, res)
       if err then
-        self:emit('esl::error::io', err)
+        if err:cat() == 'LIBUV' then
+          self:emit('esl::error::io', err)
+        end
         return self:_close(err)
       end
       if self._auto_filter then
@@ -810,7 +814,9 @@ local function on_auth(self, reply, headers)
           end
           directSendRecv(self, 'filter ' .. f[1] .. ' ' .. f[2], function(self, err, res)
             if err then
-              self:emit('esl::error::io', err)
+              if err:cat() == 'LIBUV' then
+                self:emit('esl::error::io', err)
+              end
               return self:_close(err)
             end
             self._filtered = true
@@ -907,7 +913,9 @@ function ESLConnection:open(cb)
     -- getInfo() returns an ESLevent that contains this Channel Data.
     self._queue:push_front(function(self, err, reply, headers)
       if err then
-        self:emit('esl::error::io', err)
+        if err:cat() == 'LIBUV' then
+          self:emit('esl::error::io', err)
+        end
         return self:_close(err)
       end
 
