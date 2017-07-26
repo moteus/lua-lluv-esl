@@ -24,7 +24,16 @@ end)
 
 pbx:on('esl::disconnect', function(self, eventName, err)
   -- connection lost
-  print(eventName)
+  print(eventName, err)
 end)
+
+pbx:on('esl::error::**', function(self, eventName, err)
+  print(eventName, err)
+end)
+
+pbx:on('esl::close', function(self, eventName, err)
+  print(eventName, err)
+end)
+
 
 uv.run()

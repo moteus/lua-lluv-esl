@@ -46,10 +46,9 @@ local Server = function(options, cb)
   end
 
   local function create_connection(cli)
-    local cnn = Connection{
-      socket = cli;
-      no_execute_result = options.no_execute_result;
-    }
+    options.socket = cli
+    local cnn = Connection(options)
+    options.socket = nil
     on_new_connection(cnn)
   end
 

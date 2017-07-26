@@ -17,27 +17,10 @@ local super = ESLUtils.super
 local append_uniq, is_in = ESLUtils.append_uniq, ESLUtils.is_in
 
 -------------------------------------------------------------------------------
-local CmdQueue = ut.class() do
-
-function CmdQueue:__init()
-  self._q = ut.List.new()
-  return self
-end
-
-function CmdQueue:reset()        self._q:reset()       return self end
-
-function CmdQueue:push_front(v)  self._q:push_front(v) return self end
-
-function CmdQueue:push(v)        self._q:push_back(v)  return self end
-
-function CmdQueue:pop()   return self._q:pop_front()               end
-
-function CmdQueue:peek()  return self._q:peek_front()              end
-
-function CmdQueue:size()  return self._q:size()                    end
-
-function CmdQueue:empty() return self._q:empty()                   end
-
+local CmdQueue = ut.class(ut.List) do
+CmdQueue.push = CmdQueue.__base.push_back
+CmdQueue.pop  = CmdQueue.__base.pop_front
+CmdQueue.peek = CmdQueue.__base.peek_front
 end 
 -------------------------------------------------------------------------------
 
@@ -161,9 +144,10 @@ function ESLEvent:delBody()
   return self
 end
 
-function ESLEvent:type()
+function ESLEvent:getType()
   return self:getHeader('Event-Name')
 end
+ESLEvent.type = ESLEvent.getType
 
 function ESLEvent:headers()
   return next, self._headers
@@ -202,20 +186,23 @@ end
 -------------------------------------------------------------------------------
 local ESLParser = ut.class() do
 
+local STATE_HEADER  = 1
+local STATE_CONTENT = 2
+local STATE_DONE    = 3
+
 function ESLParser:__init(options)
   self._buf = ut.Buffer.new(EOL)
   self._max_buffer_size = options and options.max_buffer_size
   self._self            = options and options.self or self
+  self._ctx             = {}
   self:_reset_context()
   return self
 end
 
 function ESLParser:_reset_context()
-  self._ctx = {
-    state   = 'header';
-    headers = {};
-    content = {};
-  }
+  self._ctx.state   = STATE_HEADER;
+  self._ctx.headers = {};
+  self._ctx.content = {};
 end
 
 function ESLParser:append(data)
@@ -303,7 +290,7 @@ function ESLParser:next_event()
   local headers = ctx.headers
   local content = ctx.content
 
-  while ctx.state == 'header' do
+  while ctx.state == STATE_HEADER do
     local line = self._buf:read_line()
     if not line then return true end
 
@@ -311,9 +298,9 @@ function ESLParser:next_event()
       local length = tonumber(headers['Content-Length'])
       if length and length > 0 then
         content.length = length
-        ctx.state = 'content'
+        ctx.state = STATE_CONTENT
       else
-        ctx.state = 'done'
+        ctx.state = STATE_DONE
       end
       break
     end
@@ -326,11 +313,11 @@ function ESLParser:next_event()
     headers[key] = decodeURI(val)
   end
 
-  if ctx.state == 'content' then
+  if ctx.state == STATE_CONTENT then
     local data = self._buf:read_n(content.length)
     if not data then return true end
     content.body = data
-    ctx.state = 'done'
+    ctx.state = STATE_DONE
   end
 
   self:_reset_context()

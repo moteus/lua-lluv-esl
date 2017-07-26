@@ -52,6 +52,7 @@ before_script:
 script: 
   - cd test
   - lua -llluv.esl -v
+  - lunitx test-esl.lua
 
 after_success:
   # - luacov-coveralls
