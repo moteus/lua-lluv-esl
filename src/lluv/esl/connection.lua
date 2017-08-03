@@ -77,13 +77,14 @@ function ESLEvent:encode(fmt, raw)
   end
 
   if fmt == 'xml' then
+    local encoder = raw and pass or encodeURI
     local data = {
       '<event>' .. EOL,
       '  <headers>' .. EOL,
     }
 
     for k, v in pairs(self._headers) do
-      data[#data + 1] = '    <' .. k .. '>' .. v .. '</' .. k .. '>' .. EOL
+      data[#data + 1] = '    <' .. k .. '>' .. encoder(v) .. '</' .. k .. '>' .. EOL
     end
     data[#data + 1] = '  </headers>' .. EOL
 
