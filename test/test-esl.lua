@@ -95,6 +95,36 @@ it('should deal with body', function()
   assert_nil(event:getHeader('Content-Length'))
 end)
 
+it('should serialize plain text', function()
+  local event = assert_table(esl.Event("CUSTOM"))
+  assert(event:addBody('hello', 'text/plain'))
+  assert(event:addHeader('message', 'url:encode'))
+  local msg = assert_string(event:serialize())
+
+  assert_match('message: url%%3[aA]encode\n', msg)
+  assert_match('\n\nhello$', msg)
+end)
+
+it('should serialize xml text', function()
+  local event = assert_table(esl.Event("CUSTOM"))
+  assert(event:addBody('hello', 'text/plain'))
+  assert(event:addHeader('message', 'url:encode'))
+  local msg = assert_string(event:serialize('xml'))
+
+  assert_match('<message>url%%3[aA]encode</message>', msg)
+  assert_match('<body>hello</body>', msg)
+end)
+
+it('should serialize json text', function()
+  local event = assert_table(esl.Event("CUSTOM"))
+  assert(event:addBody('hello', 'text/plain'))
+  assert(event:addHeader('message', 'url:encode'))
+  local msg = assert_string(event:serialize('json'))
+
+  assert_match('"message":%s*"url:encode"', msg)
+  assert_match('"_body":%s*"hello"', msg)
+end)
+
 end
 
 local _ENV = TEST_CASE'esl.parser' if ENABLE then

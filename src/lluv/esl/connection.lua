@@ -71,7 +71,7 @@ function ESLEvent:encode(fmt, raw)
 
   if fmt == 'json' then
     self._headers._body = self._body
-    local str = cjson.encode(self._headers._body)
+    local str = cjson.encode(self._headers)
     self._headers._body = nil
     return str
   end
@@ -91,7 +91,7 @@ function ESLEvent:encode(fmt, raw)
     if self._body then
       data[#data + 1] = '  <body>'
       data[#data + 1] = self._body --! @fixme do xml encode value
-      data[#data + 1] = '  </body>' .. EOL
+      data[#data + 1] = '</body>' .. EOL
     end
 
     data[#data + 1] = '</event>'
