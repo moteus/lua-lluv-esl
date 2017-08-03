@@ -19,9 +19,9 @@ dependencies = {
   "lua >= 5.1, < 5.4",
   "lluv",
   "eventemitter",
-  "lua-cjson",
-  "luaexpat",
   "luuid",
+  -- "lua-cjson",
+  -- "luaexpat",
 }
 
 build = {

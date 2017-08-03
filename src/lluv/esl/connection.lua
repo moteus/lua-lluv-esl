@@ -1,10 +1,16 @@
+local function prequire(name)
+  local ok, mod = pcall(require, name)
+  if not ok then return nil, mod end
+  return mod, m
+end
+
 local uv           = require "lluv"
 local ut           = require "lluv.utils"
 local EventEmitter = require "EventEmitter".EventEmitter
 local ESLUtils     = require "lluv.esl.utils"
 local ESLError     = require "lluv.esl.error"
-local cjson        = require "cjson.safe"
-local lom          = require "lxp.lom"
+local cjson        = prequire "cjson.safe"
+local lom          = prequire "lxp.lom"
 
 local EOL      = '\n'
 local EOF      = uv.error("LIBUV", uv.EOF)
@@ -232,7 +238,7 @@ local function read_headers(t)
   for i = 1, #t do
     local elem = t[i]
     if type(elem) == 'table' then
-      h[elem.tag] = elem[1]
+      h[elem.tag] = decodeURI(elem[1])
     end
   end
 

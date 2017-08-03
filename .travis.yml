@@ -46,13 +46,15 @@ install:
   - luarocks make rockspecs/lluv-esl-scm-0.rockspec UV_DIR=$TRAVIS_BUILD_DIR/libuv
 
 before_script:
+  - luarocks show lua-cjson        || luarocks install lua-cjson
+  - luarocks show luaexpat         || luarocks install luaexpat
   - luarocks show lunitx           || luarocks install lunitx
   - luarocks show luacov-coveralls || luarocks install luacov-coveralls
 
 script: 
   - cd test
   - lua -llluv.esl -v
-  - lunitx test-esl.lua
+  - lunit.sh test-esl.lua
 
 after_success:
   # - luacov-coveralls
