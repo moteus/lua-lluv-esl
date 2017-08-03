@@ -101,8 +101,7 @@ local _ENV = TEST_CASE'esl.parser' if ENABLE then
 
 local it = IT(_ENV or _M)
 
-it('should parse xml events', function()
-local str = [[Content-Length: 912
+local xml_string = [[Content-Length: 912
 Content-Type: text/event-xml
 
 <event>
@@ -124,40 +123,13 @@ Content-Type: text/event-xml
   </headers>
 </event>
 ]]
-  local parser = esl.Parser()
-  parser:append(str)
 
-  local event, headers = assert_table(parser:next_event())
-
-  assert_equal('CHANNEL_DESTROY', event:getType())
-  assert_equal('::1', event:getHeader('FreeSWITCH-IPv6'))
-
-  assert_table(headers)
-  assert_equal('text/event-xml', headers['Content-Type'])
-  assert_equal('912', headers['Content-Length'])
-end)
-
-it('should parse json events', function()
-local str = [[Content-Length: 513
+local json_string = [[Content-Length: 513
 Content-Type: text/event-json
 
-{"Event-Name":"CHANNEL_DESTROY","Core-UUID":"d72e096d-db60-4ceb-a241-1c98e5856acc","FreeSWITCH-Hostname":"alexey-PC","FreeSWITCH-Switchname":"alexey-PC","FreeSWITCH-IPv4":"192.168.123.60","FreeSWITCH-IPv6":"::1","Event-Date-Local":"2017-08-03 15:06:25","Event-Date-GMT":"Thu, 03 Aug 2017 12:06:25 GMT","Event-Date-Timestamp":"1501761985066904","Event-Calling-File":"switch_core_session.c","Event-Calling-Function":"switch_core_session_perform_destroy","Event-Calling-Line-Number":"1474","Event-Sequence":"206140"}
-]]
-  local parser = esl.Parser()
-  parser:append(str)
+{"Event-Name":"CHANNEL_DESTROY","Core-UUID":"d72e096d-db60-4ceb-a241-1c98e5856acc","FreeSWITCH-Hostname":"alexey-PC","FreeSWITCH-Switchname":"alexey-PC","FreeSWITCH-IPv4":"192.168.123.60","FreeSWITCH-IPv6":"::1","Event-Date-Local":"2017-08-03 15:06:25","Event-Date-GMT":"Thu, 03 Aug 2017 12:06:25 GMT","Event-Date-Timestamp":"1501761985066904","Event-Calling-File":"switch_core_session.c","Event-Calling-Function":"switch_core_session_perform_destroy","Event-Calling-Line-Number":"1474","Event-Sequence":"206140"}]]
 
-  local event, headers = assert_table(parser:next_event())
-
-  assert_equal('CHANNEL_DESTROY', event:getType())
-  assert_equal('::1', event:getHeader('FreeSWITCH-IPv6'))
-
-  assert_table(headers)
-  assert_equal('text/event-json', headers['Content-Type'])
-  assert_equal('513', headers['Content-Length'])
-end)
-
-it('should parse plain events', function()
-local str = [[Content-Length: 546
+local plain_string = [[Content-Length: 546
 Content-Type: text/event-plain
 
 Event-Name: CHANNEL_DESTROY
@@ -176,8 +148,95 @@ Event-Calling-Line-Number: 1474
 Event-Sequence: 207341
 
 ]]
+
+it('should parse xml events', function()
   local parser = esl.Parser()
-  parser:append(str)
+  parser:append(xml_string)
+
+  local event, headers = assert_table(parser:next_event())
+
+  assert_equal('CHANNEL_DESTROY', event:getType())
+  assert_equal('::1', event:getHeader('FreeSWITCH-IPv6'))
+
+  assert_table(headers)
+  assert_equal('text/event-xml', headers['Content-Type'])
+  assert_equal('912', headers['Content-Length'])
+end)
+
+it('should parse xml events by chanks', function()
+  local parser = esl.Parser()
+
+  for i = 1, #xml_string - 1 do
+    parser:append((xml_string:sub(i, i)))
+    assert_true(parser:next_event())
+  end
+  parser:append(xml_string:sub(-1))
+
+  local event, headers = assert_table(parser:next_event())
+
+  assert_equal('CHANNEL_DESTROY', event:getType())
+  assert_equal('::1', event:getHeader('FreeSWITCH-IPv6'))
+
+  assert_table(headers)
+  assert_equal('text/event-xml', headers['Content-Type'])
+  assert_equal('912', headers['Content-Length'])
+end)
+
+it('should parse json events', function()
+  local parser = esl.Parser()
+  parser:append(json_string)
+
+  local event, headers = assert_table(parser:next_event())
+
+  assert_equal('CHANNEL_DESTROY', event:getType())
+  assert_equal('::1', event:getHeader('FreeSWITCH-IPv6'))
+
+  assert_table(headers)
+  assert_equal('text/event-json', headers['Content-Type'])
+  assert_equal('513', headers['Content-Length'])
+end)
+
+it('should parse json events by chanks', function()
+  local parser = esl.Parser()
+
+  for i = 1, #json_string - 1 do
+    parser:append((json_string:sub(i, i)))
+    assert_true(parser:next_event())
+  end
+  parser:append(json_string:sub(-1))
+
+  local event, headers = assert_table(parser:next_event())
+
+  assert_equal('CHANNEL_DESTROY', event:getType())
+  assert_equal('::1', event:getHeader('FreeSWITCH-IPv6'))
+
+  assert_table(headers)
+  assert_equal('text/event-json', headers['Content-Type'])
+  assert_equal('513', headers['Content-Length'])
+end)
+
+it('should parse plain events', function()
+  local parser = esl.Parser()
+  parser:append(plain_string)
+
+  local event, headers = assert_table(parser:next_event())
+
+  assert_equal('CHANNEL_DESTROY', event:getType())
+  assert_equal('::1', event:getHeader('FreeSWITCH-IPv6'))
+
+  assert_table(headers)
+  assert_equal('text/event-plain', headers['Content-Type'])
+  assert_equal('546', headers['Content-Length'])
+end)
+
+it('should parse plain events by chanks', function()
+  local parser = esl.Parser()
+
+  for i = 1, #plain_string - 1 do
+    parser:append((plain_string:sub(i, i)))
+    assert_true(parser:next_event())
+  end
+  parser:append(plain_string:sub(-1))
 
   local event, headers = assert_table(parser:next_event())
 

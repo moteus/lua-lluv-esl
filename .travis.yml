@@ -57,7 +57,7 @@ script:
   - lunit.sh test-esl.lua
 
 after_success:
-  # - luacov-coveralls
+  - luacov-coveralls
 
 notifications:
   email:

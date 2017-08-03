@@ -1,0 +1,20 @@
+return {
+  statsfile   = "luacov.stats.out";
+  reportfile  = "luacov.report.json";
+  runreport   = false;
+  deletestats = false;
+
+  include = {
+    "/lluv/esl$",
+    "/lluv/esl/.+$",
+  };
+
+  exclude = {
+  };
+
+  coveralls = {
+    pathcorrect = {
+      {"^.-[/\\]share[/\\]lua[/\\]5.%d", "src"};
+    };
+  };
+}
