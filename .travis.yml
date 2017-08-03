@@ -28,6 +28,9 @@ matrix:
       env: LUA="luajit 2.0"
     - compiler: ": LuaJIT21"
       env: LUA="luajit 2.1"
+  allow_failures:
+    # lua-cjson does not comliled with LuaJIT 2.1.0-beta2
+    - env: LUA="luajit 2.1"
 
 branches:
   only:
