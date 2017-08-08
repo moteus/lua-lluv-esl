@@ -390,6 +390,8 @@ end
 -------------------------------------------------------------------------------
 local ESLConnection = ut.class(EventEmitter) do
 
+local super = super(ESLConnection)
+
 local function encode_cmd(cmd, args)
   cmd = cmd .. EOL
   if args then

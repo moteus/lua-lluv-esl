@@ -296,11 +296,15 @@ function utils.is_callable(f)
   return (type(f) == 'function') and f
 end
 
-function utils.super(self, m, ...)
-  if self.__base and self.__base[m] then
-    return self.__base[m](self, ...)
+local function super(class, self, method, ...)
+  if class.__base and class.__base[method] then
+    return class.__base[method](self, ...)
   end
-  return self
+  if method == '__init' then return self end
+end
+
+function utils.super(class)
+  return function(...) return super(class, ...) end
 end
 
 function utils.is_in(v, t)
