@@ -47,7 +47,7 @@ local Server = function(options, cb)
 
   local function create_connection(cli)
     options.socket = cli
-    local cnn = Connection(options)
+    local cnn = Connection.new(options)
     options.socket = nil
     on_new_connection(cnn)
   end

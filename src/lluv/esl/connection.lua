@@ -1286,7 +1286,7 @@ end
 -------------------------------------------------------------------------------
 
 return {
-  Event      = ESLEvent.new;
-  Parser     = ESLParser.new;
-  Connection = ESLConnection.new;
+  Event      = ESLEvent;
+  Parser     = ESLParser;
+  Connection = ESLConnection;
 }

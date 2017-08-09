@@ -7,9 +7,9 @@ local esl = {
 
 local Connection = require "lluv.esl.connection"
 
-esl.Event      = Connection.Event
-esl.Parser     = Connection.Parser
-esl.Connection = Connection.Connection
+esl.Event      = Connection.Event.new
+esl.Parser     = Connection.Parser.new
+esl.Connection = Connection.Connection.new
 esl.Server     = require "lluv.esl.server"
 
 return esl
