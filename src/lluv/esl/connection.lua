@@ -1,7 +1,7 @@
 local function prequire(name)
   local ok, mod = pcall(require, name)
   if not ok then return nil, mod end
-  return mod, m
+  return mod, name
 end
 
 local uv           = require "lluv"
@@ -27,7 +27,7 @@ local CmdQueue = ut.class(ut.List) do
 CmdQueue.push = CmdQueue.__base.push_back
 CmdQueue.pop  = CmdQueue.__base.pop_front
 CmdQueue.peek = CmdQueue.__base.peek_front
-end 
+end
 -------------------------------------------------------------------------------
 
 -------------------------------------------------------------------------------
@@ -403,7 +403,7 @@ local function encode_cmd(cmd, args)
       end
 
       if args._body then
-        return cmd .. 
+        return cmd ..
           'Content-Length: ' .. tostring(#args._body) ..
           EOL .. EOL ..
           args._body
@@ -727,7 +727,7 @@ function ESLConnection:_on_event(event, headers)
       return
     end
 
-    uuid = event:getHeader('Event-UUID') or event:getHeader('Unique-ID') or event:getHeader('Core-UUID')
+    local uuid = event:getHeader('Event-UUID') or event:getHeader('Unique-ID') or event:getHeader('Core-UUID')
     if uuid then name = name .. '::' .. uuid end
 
     self:emit('esl::event::' .. name, event, headers)
@@ -745,7 +745,7 @@ function ESLConnection:_on_event(event, headers)
     if ct == "text/rude-rejection" then -- acl fail
       local msg = event:getBody()
       if msg then msg = string.match(msg, "^%s*(.-)%s*$") end
-      err = ESLError(ESLError.EAUTH, msg or 'Rejected by acl')
+      local err = ESLError(ESLError.EAUTH, msg or 'Rejected by acl')
       self:emit('esl::error::auth', err)
       return self:_close(err)
     end
@@ -850,7 +850,7 @@ function ESLConnection:open(cb)
     if not self._cli then
       -- We really can not reconnect to Outbound connection
       if cb then uv.defer(cb, ENOTCONN) end
-      return 
+      return
     end
 
     if cb then self._open_q:push(cb) end
@@ -1106,6 +1106,8 @@ function ESLConnection:_execute(async, lock, cmd, app, args, uuid, cb)
     cb, uuid = uuid
   end
 
+  local loops
+
   if type(args) == 'table' then
     loops = args.loops
     args = table.concat(args, ' ')
@@ -1121,7 +1123,7 @@ function ESLConnection:_execute(async, lock, cmd, app, args, uuid, cb)
   -- Not sure why but in other cases commands may not works.
   -- ESL library do the same, but uses only header.
   -- So I just always pass args as content.
-  if not args then 
+  if not args then
     event['execute-app-arg'] = '_undef_'
 
   -- elseif (#args < 2048) and (not string.find(args, '[%z\n\r=,]')) then
@@ -1151,7 +1153,7 @@ function ESLConnection:_execute(async, lock, cmd, app, args, uuid, cb)
   -- But execution is really not start yeat.
   -- When application start execute FS send `CHANNEL_EXECUTE` event
   -- When application done FS send CHANNEL_EXECUTE_COMPLETE.
-  -- To identify such events with specific command we send 
+  -- To identify such events with specific command we send
   -- `Event-UUID` header and FS add its value as `Application-UUID`
   -- Not sure where is documented.
   -- Also if channel hangup before starting execute app there

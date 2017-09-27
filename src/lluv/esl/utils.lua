@@ -38,7 +38,7 @@ function BaseLeg:__init()
     end;
   })
 
-  return o
+  return self
 end
 
 function BaseLeg:set(name, value)
@@ -49,7 +49,7 @@ function BaseLeg:set(name, value)
     end end
   else
     self.private_.params[name] = value
-  end  
+  end
   return self
 end
 
@@ -129,7 +129,7 @@ function DialString:add_leg(leg)
 end
 
 function DialString:remove_leg(leg)
-  if not leg then return nil end 
+  if not leg then return nil end
   for i, leg_info in ipairs(self.private_.legs) do
     if leg_info.leg == leg then
       table.remove(self.private_.legs, i)
@@ -142,7 +142,7 @@ end
 function DialString:leg_by(name, pat)
   for _, leg_info in ipairs(self.private_.legs) do
     if leg_info.leg.options[name] == pat then
-      return leg
+      return leg_info.leg
     end
   end
 end

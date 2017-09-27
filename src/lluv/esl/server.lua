@@ -1,5 +1,8 @@
 local uv         = require "lluv"
 local Connection = require "lluv.esl.connection".Connection
+local ESLUtils   = require "lluv.esl.utils"
+
+local dummy = ESLUtils.dummy
 
 local DummyLogger = {} do
   local lvl = {'emerg','alert','fatal','error','warning','notice','info','debug','trace'}
@@ -74,7 +77,7 @@ local Server = function(options, cb)
       else
         log.notice('accepted new connection %s:%s', cli:getpeername())
       end
-  
+
       if cli then
         create_connection(cli)
       end
