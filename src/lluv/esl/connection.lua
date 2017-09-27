@@ -427,7 +427,7 @@ local function on_write_done(cli, err, self)
   end
 end
 
-local register_execute_complite_handler, remove_execute_complite_handler, remove_all_execute_complite_handler do
+local register_execute_complete_handler, remove_execute_complete_handler, remove_all_execute_complete_handler do
 
 local EXECUTE_EVENT_NAME = "esl::event::CHANNEL_EXECUTE_COMPLETE::"
 local HANGUP_EVENT_NAME  = "esl::event::CHANNEL_HANGUP_COMPLETE::"
@@ -441,7 +441,7 @@ local function execute_complite_handler(self, eventName, event)
   local cb = command_uuid and callbacks[command_uuid]
   if not cb then return end
 
-  remove_execute_complite_handler(self, channel_uuid, command_uuid)
+  remove_execute_complete_handler(self, channel_uuid, command_uuid)
   return cb(self, nil, event)
 end
 
@@ -457,7 +457,7 @@ local function hangup_complite_handler(self, eventName, event)
   end
 end
 
-register_execute_complite_handler = function(self, channel_uuid, command_uuid, cb)
+register_execute_complete_handler = function(self, channel_uuid, command_uuid, cb)
   local callbacks = self._callbacks[channel_uuid]
   if not callbacks then
     callbacks = {}
@@ -469,7 +469,7 @@ register_execute_complite_handler = function(self, channel_uuid, command_uuid, c
   callbacks[command_uuid] = cb or dummy
 end
 
-remove_execute_complite_handler = function(self, channel_uuid, command_uuid)
+remove_execute_complete_handler = function(self, channel_uuid, command_uuid)
   local callbacks = self._callbacks[channel_uuid]
   if not callbacks then
     return
@@ -485,7 +485,7 @@ remove_execute_complite_handler = function(self, channel_uuid, command_uuid)
   end
 end
 
-remove_all_execute_complite_handler = function(self)
+remove_all_execute_complete_handler = function(self)
   for channel_uuid in pairs(self._callbacks) do
     self._callbacks[channel_uuid] = nil
     self:off(EXECUTE_EVENT_NAME .. channel_uuid, execute_complite_handler)
@@ -668,7 +668,7 @@ function ESLConnection:_close(err, cb)
       end
     end
 
-    remove_all_execute_complite_handler(self)
+    remove_all_execute_complete_handler(self)
 
     call_q(self._close_q, self, err)
 
@@ -1163,13 +1163,13 @@ function ESLConnection:_execute(async, lock, cmd, app, args, uuid, cb)
   event['Event-UUID'] = command_uuid
 
   if self._execute_wait_response then
-    register_execute_complite_handler(self, channel_uuid, command_uuid, cb or dummy)
+    register_execute_complete_handler(self, channel_uuid, command_uuid, cb or dummy)
   end
 
   self:sendRecv(uuid and ('sendmsg ' .. uuid) or 'sendmsg', event, function(self, err, reply)
     if err or not reply:getReplyOk() then
       if self._execute_wait_response then
-        remove_execute_complite_handler(self, channel_uuid, command_uuid)
+        remove_execute_complete_handler(self, channel_uuid, command_uuid)
       end
       return cb(self, err, reply)
     end
