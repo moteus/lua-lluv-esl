@@ -1075,23 +1075,19 @@ end
 
 function ESLConnection:executeLock(...)
   local async = not not self._async
-  local lock  = not not self._lock
-  if lock == nil then lock = true end
+  local lock  = true
   return self:_execute(async, lock, 'execute', ...)
 end
 
 function ESLConnection:executeAsync(...)
-  local async = self._async
-  if async == nil then async = true end
+  local async = true
   local lock  = not not self._lock
   return self:_execute(async, lock, 'execute', ...)
 end
 
 function ESLConnection:executeAsyncLock(...)
-  local async = self._async
-  if async == nil then async = true end
-  local lock  = not not self._lock
-  if lock == nil then lock = true end
+  local async = true
+  local lock  = true
   return self:_execute(async, lock, 'execute', ...)
 end
 
